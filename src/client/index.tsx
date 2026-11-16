@@ -1,0 +1,80 @@
+import * as React from 'react'
+
+const h = React.createElement
+const prefix = '/plugins/github'
+interface ClientContext { slots: { inject(name: string, callback: () => unknown): () => void; register(options: Record<string, unknown>, component: React.ComponentType<never>): unknown } }
+interface Snapshot { ok: boolean; status: 'idle' | 'connecting' | 'ready' | 'error'; error?: string; toolCount: number; source?: string; readOnly: boolean }
+
+if (typeof document !== 'undefined' && !document.querySelector('style[data-dsh-github]')) {
+  const style = document.createElement('style')
+  style.setAttribute('data-dsh-github', '')
+  style.textContent = `
+.dsg-root{box-sizing:border-box;max-width:820px;margin:auto;padding:24px 28px 36px;font-size:14px;line-height:1.55;color:inherit}
+.dsg-root *{box-sizing:border-box}.dsg-root h2,.dsg-root h3,.dsg-root p{margin:0}.dsg-head{display:flex;align-items:center;gap:14px;margin-bottom:24px}
+.dsg-logo{display:grid;place-items:center;width:46px;height:46px;border:1px solid color-mix(in srgb,currentColor 20%,transparent);border-radius:12px;font:700 23px system-ui;background:color-mix(in srgb,currentColor 4%,transparent)}
+.dsg-title{font-size:23px;font-weight:700}.dsg-sub{opacity:.68;font-size:13px;margin-top:3px!important}.dsg-label{font-size:11px;letter-spacing:.09em;text-transform:uppercase;opacity:.6;margin-bottom:9px!important;font-weight:700}
+.dsg-card{border:1px solid color-mix(in srgb,currentColor 15%,transparent);border-radius:13px;background:color-mix(in srgb,currentColor 2.5%,transparent);padding:18px}
+.dsg-status{display:flex;align-items:center;gap:12px}.dsg-dot{width:10px;height:10px;border-radius:50%;background:#e6a23c;flex:none}.dsg-dot.ready{background:#2dbb87}.dsg-dot.error{background:#e15c5c}
+.dsg-status-copy{flex:1;min-width:0}.dsg-status-copy strong{display:block}.dsg-count{font-size:12px;opacity:.65;white-space:nowrap}.dsg-note{font-size:13px;opacity:.7;margin-top:14px!important}
+.dsg-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:16px}.dsg-button{display:inline-flex;align-items:center;justify-content:center;min-height:36px;padding:7px 14px;border:1px solid color-mix(in srgb,currentColor 20%,transparent);border-radius:9px;background:color-mix(in srgb,currentColor 5%,transparent);color:inherit;font:600 13px system-ui;text-decoration:none;cursor:pointer}
+.dsg-button.primary{background:#4779ed;color:white;border-color:#4779ed}.dsg-button:disabled{opacity:.45;cursor:not-allowed}.dsg-button:focus-visible,.dsg-input:focus-visible{outline:2px solid #7196ff;outline-offset:2px}.dsg-error{margin-top:14px!important;padding:10px 12px;border-radius:9px;background:rgba(230,89,89,.1);color:#e56b6b;overflow-wrap:anywhere}
+.dsg-separator{border:0;border-top:1px solid color-mix(in srgb,currentColor 15%,transparent);margin:20px 0}.dsg-input{width:100%;margin-top:8px;padding:9px 11px;border:1px solid color-mix(in srgb,currentColor 25%,transparent);border-radius:8px;background:transparent;color:inherit;font:inherit}.dsg-help{margin-top:18px!important;font-size:12px;opacity:.7}.dsg-help a{color:inherit}@media(max-width:640px){.dsg-root{padding:18px 16px 28px}.dsg-count{white-space:normal;text-align:right}}
+`
+  document.head.appendChild(style)
+}
+
+async function api(path: string, body?: unknown): Promise<Snapshot> {
+  const response = await fetch(prefix + path, body === undefined ? { method: 'GET', cache: 'no-store' } : {
+    method: 'POST', cache: 'no-store', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+  })
+  const value = await response.json() as Snapshot
+  if (!response.ok || !value.ok) throw new Error(value.error || `HTTP ${String(response.status)}`)
+  return value
+}
+
+export function GithubSettings(): React.ReactElement {
+  const [snapshot, setSnapshot] = React.useState<Snapshot>()
+  const [error, setError] = React.useState('')
+  const [token, setToken] = React.useState('')
+  const [busy, setBusy] = React.useState(false)
+  const refresh = React.useCallback(async () => {
+    try { setSnapshot(await api('/status')); setError('') }
+    catch (err) { setError(err instanceof Error ? err.message : 'Unable to load status') }
+  }, [])
+  React.useEffect(() => { void refresh(); const timer = window.setInterval(() => { void refresh() }, 3000); return () => window.clearInterval(timer) }, [refresh])
+  const act = async (action: 'connect' | 'disconnect', input: unknown): Promise<void> => {
+    setBusy(true); setError('')
+    try { setSnapshot(await api(`/${action}`, input)); if (action === 'connect') setToken('') }
+    catch (err) { setError(err instanceof Error ? err.message : 'Connection failed') }
+    finally { setBusy(false) }
+  }
+  const status = snapshot?.status ?? 'loading'
+  const labels = { loading: 'Loading', idle: 'Not connected', connecting: 'Connecting', ready: 'Connected', error: 'Connection failed' }
+  return h('div', { className: 'dsg-root', 'data-dsh-github-settings': '' },
+    h('header', { className: 'dsg-head' }, h('div', { className: 'dsg-logo', 'aria-hidden': true }, 'GH'),
+      h('div', null, h('h2', { className: 'dsg-title' }, 'GitHub'), h('p', { className: 'dsg-sub' }, 'Connect GitHub to DSH'))),
+    h('p', { className: 'dsg-label' }, 'Connection'),
+    h('section', { className: 'dsg-card' },
+      h('div', { className: 'dsg-status', role: 'status', 'aria-live': 'polite' }, h('span', { className: `dsg-dot ${status}` }),
+        h('div', { className: 'dsg-status-copy' }, h('strong', null, labels[status])),
+        h('span', { className: 'dsg-count' }, `${String(snapshot?.toolCount ?? 0)} tools available`)),
+      h('p', { className: 'dsg-note' }, snapshot?.readOnly ? 'Read-only mode is enabled.' : 'Agents use your GitHub permissions. Write operations require approval.'),
+      error || snapshot?.error ? h('p', { className: 'dsg-error', role: 'alert' }, error || snapshot?.error) : null,
+      h('div', { className: 'dsg-actions' },
+        h('button', { className: 'dsg-button primary', disabled: busy || status === 'connecting', onClick: () => { void act('connect', { source: 'gh' }) } }, 'Connect with GitHub CLI'),
+        status !== 'idle' && status !== 'loading' ? h('button', { className: 'dsg-button', disabled: busy, onClick: () => { void act('disconnect', {}) } }, 'Disconnect') : null,
+        h('button', { className: 'dsg-button', disabled: busy, onClick: () => { void refresh() } }, 'Refresh status')),
+      h('p', { className: 'dsg-note' }, 'GitHub CLI must be installed and signed in on the DSH host.'),
+      h('hr', { className: 'dsg-separator' }),
+      h('label', { htmlFor: 'dsg-token' }, 'Or use a GitHub personal access token'),
+      h('input', { id: 'dsg-token', className: 'dsg-input', type: 'password', autoComplete: 'off', value: token, onChange: (event: React.ChangeEvent<HTMLInputElement>) => setToken(event.target.value) }),
+      h('div', { className: 'dsg-actions' }, h('button', { className: 'dsg-button', disabled: busy || !token.trim() || status === 'connecting', onClick: () => { void act('connect', { source: 'token', token }) } }, 'Connect with token')),
+      h('p', { className: 'dsg-note' }, 'The token is encrypted in this profile using the host credential store.')),
+    h('p', { className: 'dsg-help' }, h('a', { href: 'https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens', target: '_blank', rel: 'noopener noreferrer' }, 'Learn about GitHub token permissions')))
+}
+
+export const name = '@lornatang/dsh-github'
+export const inject = ['slots']
+export function apply(ctx: ClientContext): void {
+  ctx.slots.inject('settings.section', () => ctx.slots.register({ name: 'settings.section', id: 'github', order: 32, label: 'GitHub' }, GithubSettings as React.ComponentType<never>))
+}
