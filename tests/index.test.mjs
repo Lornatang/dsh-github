@@ -8,9 +8,41 @@ import { Context } from '@deepseek-ai/cordis'
 import { ToolsService } from '@deepseek-ai/dsh-tools'
 import { ToolExecutionPipeline } from '@deepseek-ai/dsh-tools/pipeline'
 import { apply } from '../lib/index.js'
+import { registerRoutes } from '../lib/routes.js'
 import { startMockMcp } from './mock-mcp.mjs'
 
 process.env.DSH_GITHUB_ENCRYPTION_KEY = Buffer.alloc(32, 18).toString('base64')
+
+test('browser authorization and cancellation use separate fenced routes', async () => {
+  let route
+  let received
+  let cancelled = false
+  let disconnected = false
+  const snapshot = { status: 'idle', toolCount: 0, readOnly: false, oauthAvailable: true }
+  const bridge = {
+    snapshot: () => snapshot,
+    async connect(input) { received = input; return snapshot },
+    async cancel() { cancelled = true; return snapshot },
+    async disconnect() { disconnected = true; return snapshot },
+  }
+  registerRoutes({ register(value) { route = value; return () => {} } }, bridge, { requestRejection: () => undefined })
+  const server = createServer((req, res) => void route.handler(req, res))
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const base = `http://127.0.0.1:${server.address().port}/plugins/github`
+  try {
+    const invalid = await fetch(base + '/connect', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ source: 'oauth', token: 'unexpected' }) })
+    assert.equal(invalid.status, 400)
+    const response = await fetch(base + '/connect', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ source: 'oauth' }) })
+    assert.equal(response.status, 200)
+    assert.deepEqual(received, { source: 'oauth' })
+    assert.equal((await fetch(base + '/cancel', { method: 'POST' })).status, 200)
+    assert.equal(cancelled, true)
+    assert.equal(disconnected, false)
+  } finally {
+    server.closeAllConnections()
+    await new Promise((resolve) => server.close(resolve))
+  }
+})
 
 test('routes require the DSH fence and write tools request approval', async () => {
   const root = await mkdtemp(join(tmpdir(), 'github-routes-'))

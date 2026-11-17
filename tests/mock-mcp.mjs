@@ -1,6 +1,6 @@
 import { createServer } from 'node:http'
 
-export async function startMockMcp({ token = 'testtoken', initializeDelay = 0, duplicate = false, structured = false } = {}) {
+export async function startMockMcp({ token = 'testtoken', initializeDelay = 0, duplicate = false, structured = false, structuredOnly = false, scopeChallenge = false, contentAnnotations = false } = {}) {
   const requests = []
   let origin
   const definitions = [
@@ -8,16 +8,25 @@ export async function startMockMcp({ token = 'testtoken', initializeDelay = 0, d
     { name: 'push_files', description: 'Push files', inputSchema: { type: 'object', properties: {} }, annotations: { readOnlyHint: false } },
     { name: 'unknown_tool', description: 'No safety hint', inputSchema: { type: 'object', properties: {} } },
   ]
-  if (structured) definitions.push({ name: 'structured', inputSchema: { type: 'object', properties: { bad: { type: 'boolean' } } }, outputSchema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }, annotations: { readOnlyHint: true } })
+  if (structured) definitions.push({ name: 'structured', inputSchema: { type: 'object', properties: { bad: { type: 'boolean' } } }, outputSchema: { type: 'object', properties: { ok: { type: 'boolean' }, count: { type: 'number' } }, required: ['ok'] }, annotations: { readOnlyHint: true } })
   if (duplicate) definitions.push(definitions[0])
   const server = createServer(async (req, res) => {
     requests.push({ method: req.method, authorization: req.headers.authorization, toolsets: req.headers['x-mcp-toolsets'], readOnly: req.headers['x-mcp-readonly'] })
-    if (req.headers.authorization !== `Bearer ${token}`) { res.writeHead(401).end(); return }
+    const supplied = req.headers.authorization?.replace(/^Bearer /, '')
+    if (!(Array.isArray(token) ? token.includes(supplied) : supplied === token)) { res.writeHead(401).end(); return }
     if (req.method === 'DELETE') { res.writeHead(204).end(); return }
     if (req.method !== 'POST') { res.writeHead(405).end(); return }
     const chunks = []
     for await (const chunk of req) chunks.push(chunk)
     const message = JSON.parse(Buffer.concat(chunks).toString())
+    if (scopeChallenge && supplied === 'oldtoken' && message.method === 'tools/call' && message.params.name === 'push_files') {
+      res.writeHead(403, { 'www-authenticate': 'Bearer error="insufficient_scope", scope="repo workflow"' }).end('Additional scope required')
+      return
+    }
+    if (scopeChallenge && supplied === 'newtoken' && message.method === 'tools/call' && message.params.name === 'unknown_tool') {
+      res.writeHead(403, { 'www-authenticate': 'Bearer error="insufficient_scope", scope="notifications"' }).end('Additional scope required')
+      return
+    }
     if (message.id === undefined) { res.writeHead(202).end(); return }
     let result
     if (message.method === 'initialize') {
@@ -26,11 +35,12 @@ export async function startMockMcp({ token = 'testtoken', initializeDelay = 0, d
     } else if (message.method === 'tools/list') result = { tools: definitions }
     else if (message.method === 'tools/call') {
       result = message.params.name === 'structured'
-        ? { content: [{ type: 'text', text: 'structured' }], structuredContent: { ok: message.params.arguments?.bad ? 'invalid' : true } }
+        ? { content: structuredOnly ? [] : [{ type: 'text', text: 'structured' }], structuredContent: { ok: message.params.arguments?.bad ? 'invalid' : true, count: 1 } }
         : message.params.arguments?.path === 'fail'
-        ? { isError: true, content: [{ type: 'text', text: `Permission denied for ${token}` }] }
-        : { content: [{ type: 'text', text: `Read ${message.params.arguments?.path ?? 'file'} ${token}` }] }
+        ? { isError: true, content: [{ type: 'text', text: `Permission denied for ${supplied}` }] }
+        : { content: [{ type: 'text', text: `Read ${message.params.arguments?.path ?? 'file'} ${supplied}` }] }
     } else { res.writeHead(400).end(); return }
+    if (contentAnnotations && message.method === 'tools/call' && result.content?.[0]) result.content[0].annotations = { priority: 1 }
     if (!res.destroyed) res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }))
   })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))

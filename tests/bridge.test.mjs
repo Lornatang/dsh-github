@@ -64,6 +64,74 @@ test('a rejected token does not overwrite a working saved credential', async () 
   } finally { await f.close() }
 })
 
+test('redacts a complete token even when an earlier credential is its prefix', async () => {
+  const f = await fixture({ token: 'gho_ExampleSecretValue' })
+  try {
+    await f.bridge.start()
+    assert.equal((await f.bridge.connect({ source: 'token', token: 'gho_' })).status, 'error')
+    assert.equal((await f.bridge.connect({ source: 'token', token: 'gho_ExampleSecretValue' })).status, 'ready')
+    const result = await f.definitions.get('mcp__github__get_file_contents').execute({ path: 'README.md' }, {})
+    assert.match(result.content[0].text, /\[REDACTED\]/)
+    assert.doesNotMatch(result.content[0].text, /ExampleSecretValue/)
+  } finally { await f.close() }
+})
+
+test('redacts strings without corrupting numeric content annotations', async () => {
+  const f = await fixture({ token: 'validtoken', contentAnnotations: true })
+  try {
+    await f.bridge.start()
+    assert.equal((await f.bridge.connect({ source: 'token', token: '1' })).status, 'error')
+    assert.equal((await f.bridge.connect({ source: 'token', token: 'validtoken' })).status, 'ready')
+    const result = await f.definitions.get('mcp__github__get_file_contents').execute({ path: 'README.md' }, {})
+    assert.equal(result.content[0].annotations.priority, 1)
+    assert.match(result.content[0].text, /\[REDACTED\]/)
+  } finally { await f.close() }
+})
+
+test('a rejected credential does not corrupt future content metadata or text', async () => {
+  const f = await fixture({ token: 'validtoken' })
+  try {
+    await f.bridge.start()
+    assert.equal((await f.bridge.connect({ source: 'token', token: 'text' })).status, 'error')
+    assert.equal((await f.bridge.connect({ source: 'token', token: 'validtoken' })).status, 'ready')
+    const result = await f.definitions.get('mcp__github__get_file_contents').execute({ path: 'text.txt' }, {})
+    assert.equal(result.content[0].type, 'text')
+    assert.equal(result.content[0].text, 'Read text.txt [REDACTED]')
+  } finally { await f.close() }
+})
+
+test('redacts structured-only results before serializing numeric values', async () => {
+  const f = await fixture({ token: 'validtoken', structured: true, structuredOnly: true })
+  try {
+    await f.bridge.start()
+    assert.equal((await f.bridge.connect({ source: 'token', token: '1' })).status, 'error')
+    assert.equal((await f.bridge.connect({ source: 'token', token: 'validtoken' })).status, 'ready')
+    const result = await f.definitions.get('mcp__github__structured').execute({ bad: false }, {})
+    assert.deepEqual(JSON.parse(result.content[0].text), { ok: true, count: 1 })
+  } finally { await f.close() }
+})
+
+test('preserves MCP structure when the active credential is a short common value', async () => {
+  const f = await fixture({ token: 'text' })
+  try {
+    await f.bridge.start()
+    assert.equal((await f.bridge.connect({ source: 'token', token: 'text' })).status, 'ready')
+    const result = await f.definitions.get('mcp__github__get_file_contents').execute({ path: 'text.txt' }, {})
+    assert.equal(result.content[0].type, 'text')
+    assert.equal(result.content[0].text, 'Read [REDACTED].txt [REDACTED]')
+  } finally { await f.close() }
+})
+
+test('keeps structured numbers intact when they match the active credential', async () => {
+  const f = await fixture({ token: '1', structured: true, structuredOnly: true })
+  try {
+    await f.bridge.start()
+    assert.equal((await f.bridge.connect({ source: 'token', token: '1' })).status, 'ready')
+    const result = await f.definitions.get('mcp__github__structured').execute({ bad: false }, {})
+    assert.deepEqual(JSON.parse(result.content[0].text), { ok: true, count: 1 })
+  } finally { await f.close() }
+})
+
 test('disconnect cancels an in-flight connection and prevents stale registration', async () => {
   const f = await fixture({ initializeDelay: 250 })
   try {

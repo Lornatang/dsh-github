@@ -7,6 +7,7 @@ export interface RequestFence { requestRejection(req: IncomingMessage): number |
 export interface PluginBridge {
   snapshot(): BridgeSnapshot
   connect(input: ConnectInput): Promise<BridgeSnapshot>
+  cancel(): Promise<BridgeSnapshot>
   disconnect(): Promise<BridgeSnapshot>
 }
 
@@ -30,6 +31,7 @@ async function readInput(req: IncomingMessage): Promise<ConnectInput> {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Invalid connection request')
   const value = parsed as Record<string, unknown>
   if (value['source'] === 'gh' && Object.keys(value).length === 1) return { source: 'gh' }
+  if (value['source'] === 'oauth' && Object.keys(value).length === 1) return { source: 'oauth' }
   if (value['source'] === 'token' && typeof value['token'] === 'string' && Object.keys(value).every((key) => key === 'source' || key === 'token')) return { source: 'token', token: value['token'] }
   throw new Error('Invalid connection request')
 }
@@ -47,6 +49,7 @@ export function registerRoutes(web: RouteRegistrar, bridge: PluginBridge, fence:
         try { input = await readInput(req) } catch { respond(res, 400, { ok: false, error: 'Invalid connection request' }); return }
         respond(res, 200, { ...await bridge.connect(input), ok: true }); return
       }
+      if (req.method === 'POST' && path === `${ROUTE_PREFIX}/cancel`) { respond(res, 200, { ...await bridge.cancel(), ok: true }); return }
       if (req.method === 'POST' && path === `${ROUTE_PREFIX}/disconnect`) { respond(res, 200, { ...await bridge.disconnect(), ok: true }); return }
       respond(res, 404, { ok: false, error: 'unknown endpoint' })
     } catch {

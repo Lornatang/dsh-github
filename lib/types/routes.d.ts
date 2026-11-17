@@ -14,6 +14,7 @@ export interface RequestFence {
 export interface PluginBridge {
     snapshot(): BridgeSnapshot;
     connect(input: ConnectInput): Promise<BridgeSnapshot>;
+    cancel(): Promise<BridgeSnapshot>;
     disconnect(): Promise<BridgeSnapshot>;
 }
 export declare function registerRoutes(web: RouteRegistrar, bridge: PluginBridge, fence: RequestFence | undefined): () => void;

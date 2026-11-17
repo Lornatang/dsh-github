@@ -85,8 +85,56 @@ export async function verifyBrowser(launchUrl, temp) {
     assert.ok(ready, 'GitHub connection UI did not render')
     const panel = await evaluate(`document.querySelector('[data-dsh-github-settings]').innerText`)
     assert.ok(panel.includes('Connected'), 'GitHub status must be in English')
+    const browserButton = await evaluate(`[...document.querySelectorAll('[data-dsh-github-settings] button')].some((node) => node.textContent.trim() === 'Connect with GitHub')`)
+    assert.ok(browserButton, 'A browser authorization action must be available')
     assert.ok(panel.includes('Connect with GitHub CLI'), 'GitHub action must be in English')
     assert.doesNotMatch(panel, /[\u3400-\u9fff]/u, 'GitHub settings must be in English')
+    await evaluate(`(() => {
+      const realFetch = window.fetch;
+      const realOpen = window.open;
+      let mockState = 'ready';
+      window.__githubBrowserTest = { opened: '', restore: () => { window.fetch = realFetch; window.open = realOpen; } };
+      window.open = (url) => { window.__githubBrowserTest.opened = String(url); return null; };
+      window.fetch = async (input, init) => {
+        const url = typeof input === 'string' ? input : input.url;
+        const snapshot = () => ({ ok: true, status: mockState, toolCount: 0, readOnly: false, oauthAvailable: true,
+          authorization: mockState === 'authorizing' ? { userCode: 'ABCD-EFGH', verificationUri: 'https://github.com/login/device' } : undefined });
+        if (url.endsWith('/plugins/github/connect') && JSON.parse(init.body).source === 'oauth') { mockState = 'authorizing'; return Response.json(snapshot()); }
+        if (url.endsWith('/plugins/github/cancel') && mockState === 'authorizing') { mockState = 'idle'; return Response.json(snapshot()); }
+        if (url.endsWith('/plugins/github/status')) {
+          if (mockState !== 'ready') return Response.json(snapshot());
+          const response = await realFetch(input, init); const value = await response.json(); value.oauthAvailable = true; value.requiredScopes = ['workflow']; return Response.json(value);
+        }
+        return realFetch(input, init);
+      };
+      [...document.querySelectorAll('[data-dsh-github-settings] button')].find((node) => node.textContent.trim() === 'Refresh status').click();
+    })()`)
+    let enabled = false
+    for (let i = 0; i < 50; i++) {
+      enabled = await evaluate(`(() => { const root = document.querySelector('[data-dsh-github-settings]'); const button = [...root.querySelectorAll('button')].find((node) => node.textContent.trim() === 'Connect with GitHub'); return !!button && !button.disabled && root.innerText.includes('additional permissions: workflow'); })()`)
+      if (enabled) break
+      await delay(100)
+    }
+    assert.ok(enabled, 'Browser authorization must be enabled when configured')
+    assert.ok(await evaluate(`(document.querySelector('[data-dsh-github-settings]')?.innerText || '').includes('additional permissions: workflow')`), 'Required GitHub scopes must be shown before reauthorization')
+    await evaluate(`[...document.querySelectorAll('[data-dsh-github-settings] button')].find((node) => node.textContent.trim() === 'Connect with GitHub').click()`)
+    let authorizing = false
+    for (let i = 0; i < 50; i++) {
+      authorizing = await evaluate(`(document.querySelector('[data-dsh-github-settings]')?.innerText || '').includes('ABCD-EFGH')`)
+      if (authorizing) break
+      await delay(100)
+    }
+    assert.ok(authorizing, 'The one-time GitHub verification code must be visible')
+    assert.equal(await evaluate(`window.__githubBrowserTest.opened`), 'https://github.com/login/device')
+    await evaluate(`[...document.querySelectorAll('[data-dsh-github-settings] button')].find((node) => node.textContent.trim() === 'Cancel').click()`)
+    let cancelled = false
+    for (let i = 0; i < 50; i++) {
+      cancelled = await evaluate(`(document.querySelector('[data-dsh-github-settings] [role=status]')?.textContent || '').includes('Not connected')`)
+      if (cancelled) break
+      await delay(100)
+    }
+    assert.ok(cancelled, 'Cancelling browser authorization must return to the idle state')
+    await evaluate(`window.__githubBrowserTest.restore()`)
     if (process.env.DSH_TEST_SCREENSHOT) {
       const screenshot = await send('Page.captureScreenshot', { format: 'png' })
       await writeFile(process.env.DSH_TEST_SCREENSHOT, Buffer.from(screenshot.data, 'base64'))

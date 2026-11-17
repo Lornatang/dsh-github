@@ -1,5 +1,5 @@
 ---
-description: "在 dsh profile 中接入 GitHub 官方 MCP 服务：加密令牌或 GitHub CLI 凭据、agent 工具、写操作审批与连接设置页。"
+description: "在 dsh profile 中接入 GitHub 官方 MCP 服务：浏览器授权、加密凭据、agent 工具、写操作审批与连接设置页。"
 kind: "package-bundle"
 ---
 
@@ -9,7 +9,7 @@ kind: "package-bundle"
 
 ## 概要
 
-`dsh-github` 将 DeepSeek Harness profile 连接到 GitHub 托管的 MCP 服务，向 agent 注册仓库文件、Issue、Pull Request 和 Actions 等工具，并在 Web 客户端中加入 GitHub 连接设置页。可使用已登录的 GitHub CLI 或个人访问令牌连接；服务端未标为只读的工具调用会交给 DSH 审批。边界：可用工具与账号权限由 GitHub 决定，本包没有实现 Codex 的 GitHub 应用或其 OAuth 流程。
+`dsh-github` 将 DeepSeek Harness profile 连接到 GitHub 托管的 MCP 服务，向 agent 注册仓库文件、Issue、Pull Request 和 Actions 等工具，并在 Web 客户端中加入 GitHub 连接设置页。可通过浏览器授权、已登录的 GitHub CLI 或个人访问令牌连接；服务端未标为只读的工具调用会交给 DSH 审批。本包内置 GitHub OAuth 应用的公开 Client ID；可用工具与账号权限由 GitHub 决定。
 
 ## 目录
 
@@ -32,9 +32,11 @@ dsh plugin --profile <name> add @lornatang/dsh-github
 dsh plugin --profile <name> remove @lornatang/dsh-github
 ```
 
-也可安装 GitHub Release 包：`dsh plugin --profile <name> add https://github.com/Lornatang/dsh-github/releases/download/v0.1.0/lornatang-dsh-github-0.1.0.tgz`。添加或删除后重启 DSH，在 Web profile 中打开 Settings → GitHub。
+如需版本化安装包，可查看 [GitHub Releases](https://github.com/Lornatang/dsh-github/releases)。添加或删除后重启 DSH，在 Web profile 中打开 Settings → GitHub。
 
 ### 连接 GitHub
+
+选择 **Connect with GitHub**，在打开的 GitHub 页面输入 DSH 显示的一次性短验证码，检查并同意授权；之后 DSH 会自动完成连接。这种方式无需安装 `gh` 或手动创建个人令牌。GitHub 的设备授权需要输入短验证码，它不是个人访问令牌。取消待授权的请求会保留并恢复原有连接。
 
 在 DSH 宿主安装 GitHub CLI 并执行 `gh auth login` 后，选择 **Connect with GitHub CLI**。桥接通过 `gh auth token` 读取当前 `github.com` 令牌；令牌不会写入 profile，保存的连接只记录下次继续使用 `gh`。这是 GitHub CLI 的认证方式，并非本插件自行实现的 OAuth 流程。
 
@@ -49,7 +51,7 @@ dsh plugin --profile <name> remove @lornatang/dsh-github
 | GitHub 在所选工具集中公布的每个 `mcp__github__<tool>` | 宿主入口，`src/bridge.ts` |
 | 对没有 `readOnlyHint: true` 的工具请求审批 | 宿主入口，`src/index.ts` |
 | Settings → GitHub 连接状态和凭据设置页 | 客户端入口，`src/client/index.tsx` |
-| `GET /plugins/github/status`、`POST /plugins/github/connect`、`POST /plugins/github/disconnect` | 宿主入口，`src/routes.ts` |
+| `GET /plugins/github/status`、`POST /plugins/github/connect`、`POST /plugins/github/cancel`、`POST /plugins/github/disconnect` | 宿主入口，`src/routes.ts` |
 | `<profile>/data/dsh-github-<serverName>-<hash>.json` | 宿主入口，`src/store.ts` |
 
 默认工具集为 `repos,issues,pull_requests,actions`。实际工具可由 GitHub 更新，也受账号权限和 GitHub 策略影响。在权限允许时，agent 可以读取文件、创建或更新文件、批量推送文件、创建 PR，以及查看 Issue 和检查结果。大型本地仓库通常更适合使用普通 Git 操作，而不是把文件内容通过 MCP 工具传递。
@@ -60,7 +62,7 @@ dsh plugin --profile <name> remove @lornatang/dsh-github
 
 ### 凭据
 
-保存的来源及个人访问令牌（如有）以 AES-256-GCM 加密封装存入 `<profile>/data/`，文件路径作为附加认证数据。32 字节密钥来自 `@napi-rs/keyring` 接入的系统凭据存储，或来自 `DSH_GITHUB_ENCRYPTION_KEY`（标准 Base64 编码的 32 字节）。没有明文回退。POSIX 上文件权限为 `0600`、数据目录为 `0700`，并检查符号链接、目录属主和硬链接；Windows 上应使用 ACL 保护 profile 目录。
+保存的来源以及个人访问令牌或 OAuth 访问令牌和刷新令牌（如有）以 AES-256-GCM 加密封装存入 `<profile>/data/`；有过期时间的 OAuth 访问令牌会在需要时刷新。文件路径作为附加认证数据。32 字节密钥来自 `@napi-rs/keyring` 接入的系统凭据存储，或来自 `DSH_GITHUB_ENCRYPTION_KEY`（标准 Base64 编码的 32 字节）。没有明文回退。POSIX 上文件权限为 `0600`、数据目录为 `0700`，并检查符号链接、目录属主和硬链接；Windows 上应使用 ACL 保护 profile 目录。
 
 没有系统凭据存储的无界面宿主，在保存连接前需要设置持久的 `DSH_GITHUB_ENCRYPTION_KEY`，并在重启后保留相同密钥和 profile 路径。Disconnect 删除本地加密文件和 keyring 项并注销工具；它不会撤销 GitHub 令牌或退出 `gh`。本包没有协调多进程写入，请每个 profile 只运行一个 DSH 进程。
 
@@ -77,6 +79,7 @@ dsh plugin --profile <name> remove @lornatang/dsh-github
     toolsets: 'repos,issues,pull_requests,actions'
     readOnly: false
     credentialSource: saved
+    oauthClientId: 'Ov23liyuutYTU29KMjVg'
 ```
 
 | 字段 | 默认值 | 含义 |
@@ -87,11 +90,20 @@ dsh plugin --profile <name> remove @lornatang/dsh-github
 | `toolsets` | `repos,issues,pull_requests,actions` | 通过 `X-MCP-Toolsets` 传给服务端的逗号分隔工具集。 |
 | `readOnly` | `false` | 发送 `X-MCP-Readonly: true`，请求服务端仅提供只读工具。 |
 | `credentialSource` | `saved` | `saved`、`env`（`GITHUB_TOKEN`）或 `gh`（GitHub CLI）。 |
+| `oauthClientId` | 内置应用 ID | 已启用设备授权的 GitHub OAuth 应用公开 Client ID；为空时读取 `DSH_GITHUB_OAUTH_CLIENT_ID`。 |
+
+#### 维护者配置浏览器授权
+
+本包内置已注册 OAuth 应用的公开 Client ID，普通用户无需另行创建。如需使用其他应用，可在 GitHub Developer Settings 中创建 OAuth App，主页设为本仓库地址，必填的回调地址设为 `http://127.0.0.1/callback`，并启用 **Device Flow**。设备授权不会使用回调地址。将 `oauthClientId` 覆盖为该应用的公开 Client ID，或将其设为空并向 DSH 进程提供 `DSH_GITHUB_OAUTH_CLIENT_ID`；此流程不需要 Client Secret。详见 [GitHub 设备授权文档](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow)。
+
+浏览器授权初次请求 `repo` 和 `read:org` 范围，可能涉及私有仓库等较广的访问权限，实际权限还受 GitHub 账号及组织策略限制。GitHub 会在用户同意前展示权限。如果某个工具需要额外范围，该调用会报错，设置页会显示所需权限；重新选择 **Connect with GitHub**，在 GitHub 上检查并同意后，再重试操作。插件不会自动重试写操作，DSH 的审批仍然生效。
 
 请求限定在配置端点的同源地址，且不会自动跟随重定向。MCP 响应上限为 16 MiB；工具发现上限为 8 MiB、100 页和 1000 个工具。
 
 ### 排障
 
+- **浏览器授权不可用**——检查配置的 OAuth 应用 Client ID 以及是否启用 Device Flow。修改 profile 配置或进程环境后重启 DSH。
+- **刷新后的凭据无法保存**——保持 DSH 运行并恢复 profile 安全存储的访问；插件会在下次请求时重试保存。如果保存成功前关闭 DSH，可能需要重新进行浏览器授权。
 - **GitHub CLI 不可用或未登录**——在 DSH 宿主安装 `gh` 并运行 `gh auth login`，或使用个人访问令牌。
 - **连接失败或缺少工具**——检查到 GitHub MCP 端点的网络、账号与组织策略、令牌权限、所选工具集和 DSH 日志；点击连接按钮重试。
 - **安全密钥存储不可用**——解锁系统凭据存储，或设置持久的 Base64 编码 32 字节 `DSH_GITHUB_ENCRYPTION_KEY`。
@@ -114,6 +126,7 @@ dsh plugin --profile <name> remove @lornatang/dsh-github
 | `src/index.ts` | 宿主入口、路由绑定和审批策略。 |
 | `src/config.ts` | 配置 schema 与默认值。 |
 | `src/bridge.ts` | 凭据、MCP 生命周期、发现与工具注册。 |
+| `src/oauth.ts` | GitHub 设备授权与访问令牌刷新。 |
 | `src/transport.ts`、`src/response-limit.ts` | 同源限制、请求头与响应限制。 |
 | `src/store.ts` | 加密凭据文件与系统 keyring。 |
 | `src/routes.ts` | 受 DSH 栅栏保护的连接路由。 |
@@ -147,7 +160,7 @@ dsh plugin --profile <name> remove @lornatang/dsh-github
 <a id="known-limitations-and-deferred-work"></a>
 ## 已知限制与后续工作
 
-- **没有内置 GitHub OAuth 应用**——使用 `gh` 或提供令牌；GitHub 可能施加账号、组织或 MCP 访问策略。
+- **GitHub 授权策略**——GitHub 可能对内置 OAuth 应用施加账号、组织或 MCP 访问限制。
 - **每个 profile 行一个连接**——Web 路由使用固定前缀，设置页假定一个 profile 只有一个 GitHub 桥接。
 - **能力由服务端定义**——工具名称、schema 与只读提示可能变化；不可信端点提供的提示不是安全边界。
 - **不保证自动恢复**——连接关闭或请求失败时，可从设置页重新连接，或重启已配置的无界面来源。

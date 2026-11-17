@@ -64,6 +64,7 @@ try {
     await delay(100)
   }
   assert.equal(status?.status, 'idle', `plugin did not start: ${status?.error || 'no status'}`)
+  assert.equal(status?.oauthAvailable, true, 'The bundled GitHub OAuth app must enable browser sign-in by default')
   const connected = await fetch(origin + '/plugins/github/connect', { method: 'POST', headers: { cookie, origin, 'content-type': 'application/json' }, body: JSON.stringify({ source: 'token', token: 'testtoken' }) })
   assert.equal(connected.status, 200)
   status = await connected.json()

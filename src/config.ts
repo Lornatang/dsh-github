@@ -1,6 +1,7 @@
 import z from '@deepseek-ai/schemastery'
 
 export const DEFAULT_GITHUB_URL = 'https://api.githubcopilot.com/mcp/'
+export const DEFAULT_GITHUB_OAUTH_CLIENT_ID = 'Ov23liyuutYTU29KMjVg'
 
 export interface Config {
   serverName: string
@@ -9,6 +10,7 @@ export interface Config {
   toolsets: string
   readOnly: boolean
   credentialSource: 'saved' | 'env' | 'gh'
+  oauthClientId: string
 }
 
 export const Config = z.object({
@@ -18,4 +20,5 @@ export const Config = z.object({
   toolsets: z.string().default('repos,issues,pull_requests,actions'),
   readOnly: z.boolean().default(false),
   credentialSource: z.union(['saved', 'env', 'gh']).default('saved'),
+  oauthClientId: z.string().default(DEFAULT_GITHUB_OAUTH_CLIENT_ID),
 })

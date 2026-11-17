@@ -5,8 +5,12 @@ import { homedir } from 'node:os'
 import { dirname, join, parse, resolve, sep } from 'node:path'
 export interface StoredSession {
   version: 1
-  source?: 'token' | 'gh'
+  source?: 'token' | 'gh' | 'oauth'
   token?: string
+  oauthClientId?: string
+  oauthRefreshToken?: string
+  oauthExpiresAt?: number
+  oauthScopes?: string[]
 }
 
 /** Keep credentials separate for each DSH profile and server. */
@@ -136,7 +140,7 @@ export class SessionStore {
     await this.#serialize(async () => {
       if (active && !active()) throw new Error('github: connection cancelled')
       const next = { ...this.#value, ...patch, version: 1 as const }
-      await this.#flush(next)
+      await this.#flush(next, active)
       this.#value = next
     })
   }
@@ -150,7 +154,7 @@ export class SessionStore {
       if (active && !active()) throw new Error('github: connection cancelled')
       const next: StoredSession = { ...this.#value, version: 1 }
       for (const field of fields) if (field !== 'version') delete next[field]
-      await this.#flush(next)
+      await this.#flush(next, active)
       this.#value = next
     })
   }
@@ -170,7 +174,7 @@ export class SessionStore {
     })
   }
 
-  async #flush(value: StoredSession): Promise<void> {
+  async #flush(value: StoredSession, active?: () => boolean): Promise<void> {
     await secureDirectory(dirname(this.#file), true)
     await (await secureExistingFile(this.#file))?.close()
     const key = await this.#masterKey(true)
@@ -183,6 +187,7 @@ export class SessionStore {
     try {
       const handle = await open(temporary, 'wx', 0o600)
       try { await handle.writeFile(`${JSON.stringify(envelope)}\n`, 'utf8'); await handle.sync() } finally { await handle.close() }
+      if (active && !active()) throw new Error('github: connection cancelled')
       await rename(temporary, this.#file)
     } finally {
       await rm(temporary, { force: true })

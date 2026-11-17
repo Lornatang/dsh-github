@@ -16,15 +16,22 @@ export type ConnectInput = {
     source: 'token';
     token: string;
 } | {
-    source: 'gh';
+    source: 'gh' | 'oauth';
 };
-export type BridgeStatus = 'idle' | 'connecting' | 'ready' | 'error';
+export type BridgeStatus = 'idle' | 'connecting' | 'authorizing' | 'ready' | 'error';
 export interface BridgeSnapshot {
     status: BridgeStatus;
     toolCount: number;
-    source?: 'token' | 'gh' | 'env';
+    source?: 'token' | 'gh' | 'env' | 'oauth';
     error?: string;
+    warning?: string;
     readOnly: boolean;
+    oauthAvailable: boolean;
+    requiredScopes?: string[];
+    authorization?: {
+        userCode: string;
+        verificationUri: string;
+    };
 }
 export declare function publicToolName(server: string, tool: string): string;
 export declare class GithubBridge {
@@ -34,6 +41,7 @@ export declare class GithubBridge {
     requiresApproval(name: string): boolean;
     start(): Promise<void>;
     connect(input: ConnectInput): Promise<BridgeSnapshot>;
+    cancel(): Promise<BridgeSnapshot>;
     disconnect(): Promise<BridgeSnapshot>;
     dispose(): Promise<void>;
 }

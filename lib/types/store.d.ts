@@ -1,7 +1,11 @@
 export interface StoredSession {
     version: 1;
-    source?: 'token' | 'gh';
+    source?: 'token' | 'gh' | 'oauth';
     token?: string;
+    oauthClientId?: string;
+    oauthRefreshToken?: string;
+    oauthExpiresAt?: number;
+    oauthScopes?: string[];
 }
 /** Keep credentials separate for each DSH profile and server. */
 export declare function sessionFileFor(serverName: string, url: string, patchPath?: string): string;
