@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.3
+## 0.1.2
 
 - Speed up credential redaction with a cached single-pass pattern instead of per-string secret scans, and reuse pooled validation workers instead of spawning one per structured tool call.
 - Harden structured-output validation: a stuck validator can no longer hold a worker slot past its timeout, and abandoned workers are capped.
