@@ -56,13 +56,13 @@ For a headless host, configure `credentialSource: env` and provide `GITHUB_TOKEN
 
 The default toolsets are `repos,issues,pull_requests,actions`. Their actual tools can change on GitHub's side and are also affected by account permissions and GitHub policies. With suitable permissions, an agent can read files, create or update files, push a group of files, create a pull request, or inspect an issue and its checks. For large local repositories, normal Git operations may be a better fit than passing file contents through MCP tools.
 
-Tools are named `mcp__github__<name>`. Characters outside letters, digits, hyphen and underscore become underscores; a changed or overlong name is shortened and receives a twelve-character SHA-256 suffix. The bridge uses the server's descriptions and input schemas. It validates declared structured output, renders text blocks as text, and represents other content blocks by type. A server error fails the call. The GitHub token is redacted from tool output and error messages when its exact value appears.
+Tools are named `mcp__github__<name>`. Characters outside letters, digits, hyphen and underscore become underscores; a changed or overlong name is shortened and receives a twelve-character SHA-256 suffix. The bridge uses the server's descriptions and input schemas. It validates declared structured output, renders text blocks as text, and represents other content blocks by type. A server error fails the call. Active GitHub credentials are redacted from tool output and error messages in a single pass when their exact values appear.
 
 The bridge delegates to DSH's approval service for a tool unless the server marks it `readOnlyHint: true`; a missing hint is treated as requiring approval. Existing DSH policy decisions still apply. Read-only hints are provided by the configured MCP server, so use a trusted endpoint. The plugin does not grant GitHub permissions or approve calls on the user's behalf.
 
 ### Credentials
 
-The saved source and, when applicable, personal access or OAuth access and refresh tokens are stored in an AES-256-GCM envelope under `<profile>/data/`. Expiring OAuth access tokens are refreshed when needed. The file path is authenticated data. The 32-byte key comes from the operating-system credential store through `@napi-rs/keyring`, or from `DSH_GITHUB_ENCRYPTION_KEY` as standard Base64 for exactly 32 bytes. There is no plaintext fallback. On POSIX the file is restricted to `0600`, the data directory to `0700`, and symlinks, unsafe ownership and hard links are checked. On Windows, restrict the profile directory with ACLs.
+The saved source and, when applicable, personal access or OAuth access and refresh tokens are stored in an AES-256-GCM envelope under `<profile>/data/`. Expiring OAuth access tokens are refreshed when needed. The file path is authenticated data. Decrypted sessions are type-checked on load and malformed fields are dropped. The 32-byte key comes from the operating-system credential store through `@napi-rs/keyring`, or from `DSH_GITHUB_ENCRYPTION_KEY` as standard Base64 for exactly 32 bytes. There is no plaintext fallback. On POSIX the file is restricted to `0600`, the data directory to `0700`, and symlinks, unsafe ownership and hard links are checked. On Windows, restrict the profile directory with ACLs.
 
 For a headless host without an available credential store, set a persistent `DSH_GITHUB_ENCRYPTION_KEY` before saving a connection; keep the key and profile path across restarts. Disconnect removes the local encrypted file and keyring entry and unregisters tools; it does not revoke a GitHub token or sign out of `gh`. Use one DSH process per profile because this package does not coordinate concurrent writers.
 
@@ -98,7 +98,7 @@ The package includes the public Client ID of its registered OAuth app, so ordina
 
 The browser flow initially requests the OAuth scopes `repo` and `read:org`. These can grant broad access, including private repositories, subject to GitHub account and organization policies. GitHub shows the requested permissions before the user authorizes them. If a tool needs another scope, the tool call fails with a message and the settings page shows the requested scopes. Choose **Connect with GitHub** to review them on GitHub, then retry the operation. The plugin does not automatically retry writes, and DSH approval still applies.
 
-Every request stays on the configured origin, with redirects not followed automatically. MCP responses are limited to 16 MiB and discovery to 8 MiB, 100 pages and 1,000 tools.
+Every request stays on the configured origin, with redirects not followed automatically. MCP responses are limited to 16 MiB and discovery to 8 MiB, 100 pages and 1,000 tools. Connection-route request bodies are limited to 8 KiB and must arrive within 5 seconds. Structured output is validated in a bounded pool of isolated workers; a validator that cannot be stopped is abandoned without blocking later calls.
 
 ### Troubleshooting
 
@@ -118,7 +118,7 @@ Every request stays on the configured origin, with redirects not followed automa
 <details>
 <summary>Implementation internals — click to expand</summary>
 
-The `dsh.bundle.patch` manifest inserts a host row; `dsh.client` exposes the Web settings section. `apply` creates a profile-specific store and bridge, binds the fenced routes, listens for DSH's pre-execution policy event, and starts the configured credential source. The bridge opens a Streamable HTTP MCP connection, discovers all tool pages, and registers one DSH tool per server definition. A failed or cancelled connection removes its registrations. Disconnect aborts outstanding requests before deleting saved state; unloading preserves state for the next start.
+The `dsh.bundle.patch` manifest inserts a host row; `dsh.client` exposes the Web settings section. `apply` creates a profile-specific store and bridge, binds the fenced routes, listens for DSH's pre-execution policy event, and starts the configured credential source. The bridge opens a Streamable HTTP MCP connection, discovers all tool pages, and registers one DSH tool per server definition. A failed or cancelled connection removes its registrations. Disconnect aborts outstanding requests before deleting saved state; unloading preserves state for the next start. The settings page polls connection status every three seconds while its tab is visible.
 
 | Source | Contents |
 |---|---|
@@ -130,7 +130,7 @@ The `dsh.bundle.patch` manifest inserts a host row; `dsh.client` exposes the Web
 | `src/transport.ts`, `src/response-limit.ts` | Origin restriction, headers and response limits. |
 | `src/store.ts` | Encrypted credential file and host keyring. |
 | `src/routes.ts` | Fenced connection routes. |
-| `src/output-validator.ts`, `src/output-validator-worker.ts` | Worker-isolated validation of structured output. |
+| `src/output-validator.ts`, `src/output-validator-worker.ts` | Pooled, worker-isolated validation of structured output with bounded cleanup. |
 | `src/client/index.tsx` | GitHub settings page. |
 | `tests/*.test.mjs` | Mock MCP, credential, lifecycle and approval tests. |
 

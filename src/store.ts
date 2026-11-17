@@ -131,7 +131,19 @@ export class SessionStore {
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || (parsed as StoredSession).version !== 1) {
         throw new Error(`github: invalid credential file: ${this.#file}`)
       }
-      this.#value = parsed as StoredSession
+      // Accept only known, well-typed fields so a corrupted or foreign envelope
+      // cannot inject unexpected values into the connection state machine.
+      const record = parsed as Record<string, unknown>
+      const session: StoredSession = { version: 1 }
+      if (record['source'] === 'token' || record['source'] === 'gh' || record['source'] === 'oauth') session.source = record['source']
+      for (const field of ['token', 'oauthClientId', 'oauthRefreshToken'] as const) {
+        const value = record[field]
+        if (typeof value === 'string') session[field] = value
+      }
+      if (typeof record['oauthExpiresAt'] === 'number' && Number.isFinite(record['oauthExpiresAt'])) session.oauthExpiresAt = record['oauthExpiresAt']
+      const scopes = record['oauthScopes']
+      if (Array.isArray(scopes) && scopes.every((scope: unknown) => typeof scope === 'string')) session.oauthScopes = scopes as string[]
+      this.#value = session
       return this.#value
     })
   }

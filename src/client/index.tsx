@@ -42,7 +42,16 @@ export function GithubSettings(): React.ReactElement {
     try { setSnapshot(await api('/status')); setError('') }
     catch (err) { setError(err instanceof Error ? err.message : 'Unable to load status') }
   }, [])
-  React.useEffect(() => { void refresh(); const timer = window.setInterval(() => { void refresh() }, 3000); return () => window.clearInterval(timer) }, [refresh])
+  React.useEffect(() => {
+    // Pause background polling while the tab is hidden; refresh on return.
+    let timer: number | undefined
+    const stop = (): void => { if (timer !== undefined) { window.clearInterval(timer); timer = undefined } }
+    const start = (): void => { if (timer === undefined) { void refresh(); timer = window.setInterval(() => { void refresh() }, 3000) } }
+    const onVisibility = (): void => { if (document.hidden) stop(); else start() }
+    if (!document.hidden) start()
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => { stop(); document.removeEventListener('visibilitychange', onVisibility) }
+  }, [refresh])
   const act = async (action: 'connect' | 'cancel' | 'disconnect', input: unknown): Promise<void> => {
     setBusy(true); setError('')
     try { setSnapshot(await api(`/${action}`, input)); if (action === 'connect') setToken('') }

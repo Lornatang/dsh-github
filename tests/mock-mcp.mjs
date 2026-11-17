@@ -1,7 +1,9 @@
 import { createServer } from 'node:http'
 
-export async function startMockMcp({ token = 'testtoken', initializeDelay = 0, duplicate = false, structured = false, structuredOnly = false, scopeChallenge = false, contentAnnotations = false } = {}) {
+export async function startMockMcp({ token = 'testtoken', initializeDelay = 0, duplicate = false, structured = false, structuredOnly = false, scopeChallenge = false, contentAnnotations = false, largeText = 0 } = {}) {
   const requests = []
+  const calls = []
+  const state = { clientInfo: undefined }
   let origin
   const definitions = [
     { name: 'get_file_contents', description: 'Read a file', inputSchema: { type: 'object', properties: { path: { type: 'string' } } }, annotations: { readOnlyHint: true } },
@@ -30,20 +32,22 @@ export async function startMockMcp({ token = 'testtoken', initializeDelay = 0, d
     if (message.id === undefined) { res.writeHead(202).end(); return }
     let result
     if (message.method === 'initialize') {
+      state.clientInfo = message.params.clientInfo
       if (initializeDelay) await new Promise((resolve) => setTimeout(resolve, initializeDelay))
       result = { protocolVersion: message.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: 'github-mock', version: '1' } }
     } else if (message.method === 'tools/list') result = { tools: definitions }
     else if (message.method === 'tools/call') {
+      calls.push({ name: message.params.name, arguments: message.params.arguments })
       result = message.params.name === 'structured'
         ? { content: structuredOnly ? [] : [{ type: 'text', text: 'structured' }], structuredContent: { ok: message.params.arguments?.bad ? 'invalid' : true, count: 1 } }
         : message.params.arguments?.path === 'fail'
         ? { isError: true, content: [{ type: 'text', text: `Permission denied for ${supplied}` }] }
-        : { content: [{ type: 'text', text: `Read ${message.params.arguments?.path ?? 'file'} ${supplied}` }] }
+        : { content: [{ type: 'text', text: largeText ? `${'x'.repeat(largeText)} ${supplied}` : `Read ${message.params.arguments?.path ?? 'file'} ${supplied}` }] }
     } else { res.writeHead(400).end(); return }
     if (contentAnnotations && message.method === 'tools/call' && result.content?.[0]) result.content[0].annotations = { priority: 1 }
     if (!res.destroyed) res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }))
   })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   origin = `http://127.0.0.1:${server.address().port}`
-  return { url: `${origin}/mcp`, requests, close: () => new Promise((resolve) => { server.closeAllConnections(); server.close(resolve) }) }
+  return { url: `${origin}/mcp`, requests, calls, state, close: () => new Promise((resolve) => { server.closeAllConnections(); server.close(resolve) }) }
 }

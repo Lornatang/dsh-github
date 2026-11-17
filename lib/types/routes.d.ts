@@ -1,6 +1,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { BridgeSnapshot, ConnectInput } from './bridge.js';
 export declare const ROUTE_PREFIX = "/plugins/github";
+/** A fenced client can still trickle request bytes forever; bound the read. */
+export declare const REQUEST_BODY_TIMEOUT_MS = 5000;
 export interface RouteRegistrar {
     register(route: {
         kind: 'prefix';

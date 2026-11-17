@@ -13,6 +13,17 @@ function limitStream(body: ReadableStream<Uint8Array>, maxBytes: number, events:
   return body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
     transform(chunk, controller) {
       if (events) {
+        // Fast path for chunks without line separators: account in bulk instead
+        // of scanning every byte. Equivalent to the loop below for such chunks.
+        if (chunk.length > 0 && !chunk.includes(13) && !chunk.includes(10)) {
+          if (lineSize === 0) comment = chunk[0] === 58
+          lineSize += chunk.length
+          size += chunk.length
+          previousCR = false
+          if (size > maxBytes) { onLimit(); throw new Error('github: MCP response exceeds the byte limit') }
+          controller.enqueue(chunk)
+          return
+        }
         // SSE events end at a blank line. Handle CR, LF and CRLF, including
         // separators split across network chunks, without buffering an event.
         for (const byte of chunk) {

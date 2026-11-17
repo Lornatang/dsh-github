@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { promisify } from 'node:util'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
@@ -15,6 +16,12 @@ const runFile = promisify(execFile)
 const MAX_DISCOVERY_BYTES = 8 * 1024 * 1024
 const MAX_PAGES = 100
 const MAX_TOOLS = 1000
+// Report the real package version to the MCP server instead of a stale literal.
+const CLIENT_VERSION = (() => {
+  try { return (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version?: string }).version ?? '0.0.0' } catch { return '0.0.0' }
+})()
+const STRUCTURAL_KEYS = new Set(['type', 'text', 'annotations', 'priority', 'audience', 'data', 'mimeType', 'resource', 'uri', 'blob'])
+const CONTENT_TYPES = new Set(['text', 'image', 'audio', 'resource', 'resource_link'])
 
 export interface BridgeHost {
   register(definition: ToolDefinition): () => void
@@ -68,6 +75,7 @@ export class GithubBridge {
   #refresh?: Promise<string>
   #secrets = new Set<string>()
   #attemptSecrets = new Set<string>()
+  #secretPattern: RegExp | null | undefined
   #generation = 0
   #controller = new AbortController()
   #tail: Promise<void> = Promise.resolve()
@@ -175,7 +183,7 @@ export class GithubBridge {
     if (this.#disposed) return
     this.#disposed = true
     this.#invalidate()
-    await this.#enqueue(async () => { await this.#shutdownClient(); this.#token = undefined; this.#secrets.clear(); this.#attemptSecrets.clear() })
+    await this.#enqueue(async () => { await this.#shutdownClient(); this.#token = undefined; this.#secrets.clear(); this.#attemptSecrets.clear(); this.#secretPattern = undefined })
   }
 
   #active(generation: number): boolean { return !this.#disposed && generation === this.#generation }
@@ -187,6 +195,7 @@ export class GithubBridge {
     this.#warning = undefined
     this.#oauth = undefined; this.#refresh = undefined
     this.#attemptSecrets.clear()
+    this.#secretPattern = undefined
     return this.#generation
   }
   async #enqueue(work: () => Promise<void>): Promise<void> {
@@ -195,18 +204,26 @@ export class GithubBridge {
     return run
   }
   #redact(message: string): string {
-    for (const secret of [...this.#secrets, ...this.#attemptSecrets].sort((a, b) => b.length - a.length)) message = message.split(secret).join('[REDACTED]')
-    return message
+    const pattern = this.#redactionPattern()
+    return pattern ? message.replace(pattern, '[REDACTED]') : message
+  }
+  // One cached alternation replaces every secret in a single pass. Rebuilding
+  // and sorting the secret list per string made large results O(secrets x bytes),
+  // and sequential replacement could corrupt an inserted [REDACTED] marker when
+  // a later secret matched text inside it.
+  #redactionPattern(): RegExp | null {
+    if (this.#secretPattern !== undefined) return this.#secretPattern
+    const secrets = [...new Set([...this.#secrets, ...this.#attemptSecrets])].filter(Boolean).sort((a, b) => b.length - a.length)
+    this.#secretPattern = secrets.length ? new RegExp(secrets.map((secret) => secret.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g') : null
+    return this.#secretPattern
   }
   #redactValue(value: unknown): unknown {
     if (typeof value === 'string') return this.#redact(value)
     if (Array.isArray(value)) return value.map((part) => this.#redactValue(part))
     if (value && typeof value === 'object') {
-      const structuralKeys = new Set(['type', 'text', 'annotations', 'priority', 'audience', 'data', 'mimeType', 'resource', 'uri', 'blob'])
-      const contentTypes = new Set(['text', 'image', 'audio', 'resource', 'resource_link'])
       return Object.fromEntries(Object.entries(value).map(([key, part]) => [
-        structuralKeys.has(key) ? key : this.#redact(key),
-        key === 'type' && typeof part === 'string' && contentTypes.has(part) ? part : this.#redactValue(part),
+        STRUCTURAL_KEYS.has(key) ? key : this.#redact(key),
+        key === 'type' && typeof part === 'string' && CONTENT_TYPES.has(part) ? part : this.#redactValue(part),
       ]))
     }
     return value
@@ -217,6 +234,7 @@ export class GithubBridge {
     this.#authorization = undefined
     this.#error = this.#redact(error instanceof Error ? error.message : 'GitHub connection failed')
     this.#attemptSecrets.clear()
+    this.#secretPattern = undefined
     this.#host.logger.error(`github: ${this.#error}`)
   }
 
@@ -269,6 +287,7 @@ export class GithubBridge {
         const secrets = session.persisted ? this.#secrets : this.#attemptSecrets
         secrets.add(next.accessToken)
         if (next.refreshToken) secrets.add(next.refreshToken)
+        this.#secretPattern = undefined
         const scopes = next.scopes ?? session.scopes
         Object.assign(session, next, { scopes })
         this.#token = next.accessToken
@@ -299,17 +318,18 @@ export class GithubBridge {
     let token = await this.#credential(source, supplied)
     if (!this.#active(generation)) return
     this.#attemptSecrets.add(token)
+    this.#secretPattern = undefined
     if (source === 'oauth' && !this.#oauth) {
       const stored = this.#options.store.current
       this.#oauth = { accessToken: token, refreshToken: stored.oauthRefreshToken, expiresAt: stored.oauthExpiresAt, scopes: stored.oauthScopes, clientId: stored.oauthClientId || this.#oauthClientId(), persisted: true }
     }
     if (source === 'oauth') {
-      if (this.#oauth?.refreshToken) this.#attemptSecrets.add(this.#oauth.refreshToken)
+      if (this.#oauth?.refreshToken) { this.#attemptSecrets.add(this.#oauth.refreshToken); this.#secretPattern = undefined }
       token = await this.#oauthToken(generation)
     }
     if (!this.#active(generation)) return
     this.#token = token
-    const client = new Client({ name: 'dsh-github', version: '0.1.1' }, { jsonSchemaValidator: deferredOutputValidation })
+    const client = new Client({ name: 'dsh-github', version: CLIENT_VERSION }, { jsonSchemaValidator: deferredOutputValidation })
     let events = 0
     let since = Date.now()
     const serverUrl = new URL(this.#options.url)
@@ -358,6 +378,8 @@ export class GithubBridge {
       this.#register(client, tools, signal)
       if (!this.#active(generation)) throw new Error('connection cancelled')
       this.#status = 'ready'; this.#error = undefined
+      // Moving attempts into the active set leaves the union unchanged, so the
+      // cached redaction pattern stays valid.
       for (const secret of this.#attemptSecrets) this.#secrets.add(secret)
       this.#attemptSecrets.clear()
       this.#previousSource = undefined
@@ -408,7 +430,7 @@ export class GithubBridge {
           execute: async (args: unknown, context: { signal?: AbortSignal }) => {
             const signal = context.signal ? AbortSignal.any([connectionSignal, context.signal]) : connectionSignal
             try {
-              const result = await client.callTool({ name: tool.name, arguments: (typeof args === 'object' && args !== null ? args : {}) as Record<string, unknown> }, undefined, { timeout: this.#options.toolCallTimeoutMs, signal })
+              const result = await client.callTool({ name: tool.name, arguments: (typeof args === 'object' && args !== null && !Array.isArray(args) ? args : {}) as Record<string, unknown> }, undefined, { timeout: this.#options.toolCallTimeoutMs, signal })
               if (result.isError) throw new Error(display(result.content) || 'GitHub MCP tool failed')
               if (tool.outputSchema) {
                 if (result.structuredContent === undefined) throw new Error(`github: tool ${tool.name} did not return structured output`)

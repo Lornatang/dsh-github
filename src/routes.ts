@@ -2,6 +2,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { BridgeSnapshot, ConnectInput } from './bridge.js'
 
 export const ROUTE_PREFIX = '/plugins/github'
+/** A fenced client can still trickle request bytes forever; bound the read. */
+export const REQUEST_BODY_TIMEOUT_MS = 5000
 export interface RouteRegistrar { register(route: { kind: 'prefix'; path: string; handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void> }): () => void }
 export interface RequestFence { requestRejection(req: IncomingMessage): number | undefined }
 export interface PluginBridge {
@@ -12,20 +14,24 @@ export interface PluginBridge {
 }
 
 function respond(res: ServerResponse, status: number, value: unknown): void {
+  if (res.destroyed || res.writableEnded) return
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' })
   res.end(JSON.stringify(value))
 }
 
 async function readInput(req: IncomingMessage): Promise<ConnectInput> {
   if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] ?? '')) throw new Error('Expected JSON')
+  const deadline = setTimeout(() => req.destroy(), REQUEST_BODY_TIMEOUT_MS)
   const chunks: Buffer[] = []
   let size = 0
-  for await (const chunk of req) {
-    const part = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-    size += part.length
-    if (size > 8192) throw new Error('Request is too large')
-    chunks.push(part)
-  }
+  try {
+    for await (const chunk of req) {
+      const part = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      size += part.length
+      if (size > 8192) throw new Error('Request is too large')
+      chunks.push(part)
+    }
+  } finally { clearTimeout(deadline) }
   let parsed: unknown
   try { parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { throw new Error('Invalid JSON') }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Invalid connection request')

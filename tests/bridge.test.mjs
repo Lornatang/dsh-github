@@ -170,3 +170,32 @@ test('validates structured output and passes read-only mode to GitHub', async ()
     await assert.rejects(tool.execute({ bad: true }, {}), /structured output does not match/)
   } finally { await bridge.dispose(); await f.close() }
 })
+
+test('reports the package version and forwards only plain-object arguments', async () => {
+  const f = await fixture()
+  try {
+    assert.equal((await f.bridge.connect({ source: 'token', token: 'testtoken' })).status, 'ready')
+    const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
+    assert.equal(f.mock.state.clientInfo.version, pkg.version)
+    const push = f.definitions.get('mcp__github__push_files')
+    await push.execute(['not', 'an', 'object'], {})
+    assert.deepEqual(f.mock.calls.at(-1).arguments, {})
+    await push.execute(null, {})
+    assert.deepEqual(f.mock.calls.at(-1).arguments, {})
+    await push.execute({ ok: true }, {})
+    assert.deepEqual(f.mock.calls.at(-1).arguments, { ok: true })
+  } finally { await f.close() }
+})
+
+test('redacts credentials from multi-megabyte tool output in one pass', async () => {
+  const f = await fixture({ largeText: 2_000_000 })
+  try {
+    assert.equal((await f.bridge.connect({ source: 'token', token: 'testtoken' })).status, 'ready')
+    const read = f.definitions.get('mcp__github__get_file_contents')
+    const result = await read.execute({ path: 'big' }, {})
+    const text = result.content[0].text
+    assert.ok(text.endsWith('[REDACTED]'))
+    assert.ok(!text.includes('testtoken'))
+    assert.equal(text.length, 2_000_000 + 1 + '[REDACTED]'.length)
+  } finally { await f.close() }
+})
