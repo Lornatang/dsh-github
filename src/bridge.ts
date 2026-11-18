@@ -23,11 +23,19 @@ const CLIENT_VERSION = (() => {
 const STRUCTURAL_KEYS = new Set(['type', 'text', 'annotations', 'priority', 'audience', 'data', 'mimeType', 'resource', 'uri', 'blob'])
 const CONTENT_TYPES = new Set(['text', 'image', 'audio', 'resource', 'resource_link'])
 
+const MAX_ERROR_CHARS = 500
+const MIN_DISCOVERY_MS = 30_000
+const MAX_DISCOVERY_MS = 600_000
+
 export interface BridgeHost {
   register(definition: ToolDefinition): () => void
   logger: { info(message: string): void; warn(message: string): void; error(message: string): void }
 }
-export interface BridgeOptions extends Config { store: SessionStore }
+export interface BridgeOptions extends Config {
+  store: SessionStore
+  /** Whether the host exposes tools/pre-execute. When false, only read-only tools may register. */
+  approvalHook?: boolean
+}
 export type ConnectInput = { source: 'token'; token: string } | { source: 'gh' | 'oauth' }
 export type BridgeStatus = 'idle' | 'connecting' | 'authorizing' | 'ready' | 'error'
 export interface BridgeSnapshot { status: BridgeStatus; toolCount: number; source?: 'token' | 'gh' | 'env' | 'oauth'; error?: string; warning?: string; readOnly: boolean; oauthAvailable: boolean; requiredScopes?: string[]; scopes?: string[]; authorization?: { userCode: string; verificationUri: string } }
@@ -51,8 +59,8 @@ function display(content: unknown): string {
   }).filter(Boolean).join('\n\n')
 }
 
-function validateToken(token: string): string {
-  const value = token.trim()
+function validateToken(token: unknown): string {
+  const value = (typeof token === 'string' ? token : '').trim()
   if (!value || value.length > 4096 || !/^[A-Za-z0-9._~+/=-]+$/.test(value)) throw new Error('github: invalid GitHub token')
   return value
 }
@@ -234,7 +242,9 @@ export class GithubBridge {
     if (!this.#active(generation)) return
     this.#status = 'error'
     this.#authorization = undefined
-    this.#error = this.#redact(error instanceof Error ? error.message : 'GitHub connection failed')
+    // Upstream error bodies are untrusted and can be large; keep a short text only.
+    const text = error instanceof Error ? error.message : 'GitHub connection failed'
+    this.#error = this.#redact(text.length > MAX_ERROR_CHARS ? `${text.slice(0, MAX_ERROR_CHARS)}…` : text)
     this.#attemptSecrets.clear()
     this.#secretPattern = undefined
     this.#host.logger.error(`github: ${this.#error}`)
@@ -406,6 +416,8 @@ export class GithubBridge {
   }
 
   async #discover(client: Client, signal: AbortSignal): Promise<DiscoveredTool[]> {
+    const budget = Math.min(Math.max(this.#options.toolCallTimeoutMs * 4, MIN_DISCOVERY_MS), MAX_DISCOVERY_MS)
+    signal = AbortSignal.any([signal, AbortSignal.timeout(budget)])
     const tools: DiscoveredTool[] = []
     const cursors = new Set<string>()
     let cursor: string | undefined
@@ -433,6 +445,10 @@ export class GithubBridge {
     this.#clearTools()
     try {
       for (const tool of tools) {
+        // In read-only mode, or without an approval channel in the host, only
+        // tools the server marks read-only may register; anything else would
+        // bypass the requested restriction or the approval prompt.
+        if ((this.#options.readOnly || this.#options.approvalHook === false) && tool.annotations?.readOnlyHint !== true) continue
         const name = publicToolName(this.#options.serverName, tool.name)
         const definition = {
           name, description: tool.description ?? '', parameters: tool.inputSchema,
@@ -453,14 +469,19 @@ export class GithubBridge {
               if (result.structuredContent === undefined) return { content: [] }
               return { content: [{ type: 'text', text: JSON.stringify(this.#redactValue(result.structuredContent)) }] }
             } catch (error) {
-              const message = this.#redact(error instanceof Error ? error.message : 'GitHub MCP tool failed')
+              const original = error instanceof Error ? error.message : 'GitHub MCP tool failed'
+              const message = this.#redact(original)
               // GitHub reports workflow-write refusals as tool errors, not HTTP
               // scope challenges, so route them into the same reauthorization flow.
               if (!connectionSignal.aborted && this.#source === 'oauth' && /without `?workflow`? scope/.test(message)) {
                 this.#requiredScopes = [...new Set([...(this.#requiredScopes ?? []), 'workflow'])]
                 throw new Error(`GitHub requires additional permissions (${this.#requiredScopes.join(', ')}). Connect again in GitHub settings, approve them, and retry the operation.`)
               }
-              throw new Error(message)
+              // Preserve cancellation and MCP error identity unless redaction changes the text.
+              if (message === original) throw error
+              const wrapped = new Error(message, { cause: error })
+              if (error instanceof Error) wrapped.name = error.name
+              throw wrapped
             }
           },
         } as ToolDefinition

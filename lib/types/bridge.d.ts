@@ -11,6 +11,8 @@ export interface BridgeHost {
 }
 export interface BridgeOptions extends Config {
     store: SessionStore;
+    /** Whether the host exposes tools/pre-execute. When false, only read-only tools may register. */
+    approvalHook?: boolean;
 }
 export type ConnectInput = {
     source: 'token';

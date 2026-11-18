@@ -158,6 +158,50 @@ test('rejects duplicate tools, unsafe origins and credential-bearing redirects',
   } finally { await f.close() }
 })
 
+test('refuses a missing profile and drops stored fields of an unknown source', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-github-store-'))
+  try {
+    assert.throws(() => sessionFileFor('github', 'https://api.githubcopilot.com/mcp/'), /active DSH profile is unknown/)
+    const file = sessionFileFor('github', 'https://api.githubcopilot.com/mcp/', join(root, 'cordis.patch.yml'))
+    const store = new SessionStore(file)
+    await store.load()
+    await store.patch({ source: 'env', token: 'testtoken' })
+    const restored = new SessionStore(file)
+    const loaded = await restored.load()
+    assert.equal(loaded.source, undefined)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('read-only mode and a missing approval hook only register read-only tools', async () => {
+  const f = await fixture()
+  try {
+    const readonly = new GithubBridge(f.host, { ...f.config, readOnly: true, store: new SessionStore(f.file) })
+    await readonly.start()
+    assert.equal((await readonly.connect({ source: 'token', token: 'testtoken' })).status, 'ready')
+    assert.equal(readonly.requiresApproval('mcp__github__push_files'), false)
+    assert(f.definitions.has('mcp__github__get_file_contents'))
+    assert(!f.definitions.has('mcp__github__push_files'))
+    await readonly.dispose()
+    const guarded = new GithubBridge(f.host, { ...f.config, approvalHook: false, store: new SessionStore(f.file) })
+    await guarded.start()
+    assert.equal((await guarded.connect({ source: 'token', token: 'testtoken' })).status, 'ready')
+    assert(!f.definitions.has('mcp__github__push_files'))
+    assert(f.definitions.has('mcp__github__get_file_contents'))
+    await guarded.dispose()
+  } finally { await f.close() }
+})
+
+test('tool errors keep cancellation identity', async () => {
+  const f = await fixture()
+  try {
+    assert.equal((await f.bridge.connect({ source: 'token', token: 'testtoken' })).status, 'ready')
+    const read = f.definitions.get('mcp__github__get_file_contents')
+    const controller = new AbortController()
+    controller.abort()
+    await assert.rejects(read.execute({ path: 'README.md' }, { signal: controller.signal }), (error) => error?.name === 'AbortError')
+  } finally { await f.close() }
+})
+
 test('validates structured output and passes read-only mode to GitHub', async () => {
   const f = await fixture({ structured: true })
   const bridge = new GithubBridge(f.host, { ...f.config, readOnly: true, store: new SessionStore(f.file) })

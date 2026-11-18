@@ -28,8 +28,10 @@ async function api(path: string, body?: unknown): Promise<Snapshot> {
   const response = await fetch(prefix + path, body === undefined ? { method: 'GET', cache: 'no-store' } : {
     method: 'POST', cache: 'no-store', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
   })
-  const value = await response.json() as Snapshot
-  if (!response.ok || !value.ok) throw new Error(value.error || `HTTP ${String(response.status)}`)
+  const text = await response.text()
+  let value: Snapshot | undefined
+  try { value = text ? JSON.parse(text) as Snapshot : undefined } catch { value = undefined }
+  if (!response.ok || !value?.ok) throw new Error(value?.error || `HTTP ${String(response.status)}`)
   return value
 }
 

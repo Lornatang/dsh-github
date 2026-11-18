@@ -62,7 +62,7 @@ dsh plugin --profile <name> remove @lornatang/dsh-github
 
 ### 凭据
 
-保存的来源以及个人访问令牌或 OAuth 访问令牌和刷新令牌（如有）以 AES-256-GCM 加密封装存入 `<profile>/data/`；有过期时间的 OAuth 访问令牌会在需要时刷新。文件路径作为附加认证数据。32 字节密钥来自 `@napi-rs/keyring` 接入的系统凭据存储，或来自 `DSH_GITHUB_ENCRYPTION_KEY`（标准 Base64 编码的 32 字节）。没有明文回退。POSIX 上文件权限为 `0600`、数据目录为 `0700`，并检查符号链接、目录属主和硬链接；Windows 上应使用 ACL 保护 profile 目录。
+保存的来源以及个人访问令牌或 OAuth 访问令牌和刷新令牌（如有）以 AES-256-GCM 加密封装存入 `<profile>/data/`；有过期时间的 OAuth 访问令牌会在需要时刷新。文件路径作为附加认证数据。32 字节密钥来自 `@napi-rs/keyring` 接入的系统凭据存储，或来自 `DSH_GITHUB_ENCRYPTION_KEY`（标准 Base64 编码的 32 字节）。没有明文回退。POSIX 上文件权限为 `0600`、数据目录为 `0700`，并检查符号链接、目录属主和硬链接；Windows 上应使用 ACL 保护 profile 目录Windows 上读取器还会校验已打开文件与已检查文件仍为同一文件，以拒绝检查与打开之间的替换。
 
 没有系统凭据存储的无界面宿主，在保存连接前需要设置持久的 `DSH_GITHUB_ENCRYPTION_KEY`，并在重启后保留相同密钥和 profile 路径。Disconnect 删除本地加密文件和 keyring 项并注销工具；它不会撤销 GitHub 令牌或退出 `gh`。本包没有协调多进程写入，请每个 profile 只运行一个 DSH 进程。
 
@@ -98,7 +98,7 @@ dsh plugin --profile <name> remove @lornatang/dsh-github
 
 浏览器授权初次请求 `repo` 和 `read:org` 范围，可能涉及私有仓库等较广的访问权限，实际权限还受 GitHub 账号及组织策略限制。GitHub 会在用户同意前展示权限。如果某个工具需要额外范围，该调用会报错，设置页会显示所需权限；重新选择 **Connect with GitHub**，在 GitHub 上检查并同意后，再重试操作。插件不会自动重试写操作，DSH 的审批仍然生效。
 
-请求限定在配置端点的同源地址，且不会自动跟随重定向。MCP 响应上限为 16 MiB；工具发现上限为 8 MiB、100 页和 1000 个工具。
+请求限定在配置端点的同源地址，且不会自动跟随重定向。MCP 响应体上限为 16 MiB；对服务器发送事件流，该上限按单个事件计算，而整体读取响应体（JSON 或文本）时另有 16 MiB 总量上限。工具发现上限为 8 MiB、100 页和 1000 个工具，并受统一的总时限约束。
 
 ### 排障
 

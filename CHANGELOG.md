@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.6
+
+- Fail closed when the host does not expose the tool approval hook: only tools marked read-only register, so a host without `tools/pre-execute` cannot run writes without approval.
+- Bound tool discovery with one overall deadline derived from `toolCallTimeoutMs` (30 seconds to 10 minutes) instead of only per-page timeouts.
+- Detect a credential file swapped between the security check and the open on Windows, and refuse to share credentials when the active profile is unknown.
+- Truncate upstream connection errors before they reach the settings page.
+- Parse the settings API response only after checking the HTTP status, so an empty 401 or 403 body no longer shows a JSON syntax error.
+- Reject `toolCallTimeoutMs` values above the 32-bit signed millisecond limit.
+- Preserve cancellation and MCP error identity when a failure passes through credential redaction.
+- Cover the new behavior with tests for the approval-hook failure path, credential swaps, profile refusal, and cancellation identity.
+
 ## 0.1.5
 
 - Request the `read:project`, `gist`, and `security_events` OAuth scopes by default so the projects, gists, and security-alert toolsets work after browser sign-in. Existing sessions need one reconnect to grant them.

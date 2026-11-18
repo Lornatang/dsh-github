@@ -23,7 +23,11 @@ function identity(value: unknown): unknown {
 export function apply(ctx: Context, config: Settings): void {
   const scope = ctx as unknown as Scope
   const store = new SessionStore(sessionFileFor(config.serverName, config.url, scope.profileContext?.patchPath))
-  const bridge = new GithubBridge({ register: (definition) => ctx.tools.register(definition), logger: ctx.logger }, { ...config, store })
+  // Fail closed when the host cannot ask for approval: tools that may modify
+  // remote data must not register without an approval hook.
+  const approvalHook = typeof scope.on === 'function'
+  if (!approvalHook) ctx.logger.error('github: tool approval hook is unavailable; only read-only tools will register')
+  const bridge = new GithubBridge({ register: (definition) => ctx.tools.register(definition), logger: ctx.logger }, { ...config, store, approvalHook })
   ctx.effect(() => () => bridge.dispose(), 'github:connection')
   ctx.effect(() => {
     const off = scope.on?.('tools/pre-execute', async (exec: ToolExecution, next: () => Promise<PreToolDecision>) => {
