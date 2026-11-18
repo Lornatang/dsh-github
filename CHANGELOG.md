@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.5
+
+- Request the `read:project`, `gist`, and `security_events` OAuth scopes by default so the projects, gists, and security-alert toolsets work after browser sign-in. Existing sessions need one reconnect to grant them.
+
 ## 0.1.4
 
 - Request the `read:user` and `notifications` OAuth scopes by default so profile and notification tools work after browser sign-in. Existing sessions need one reconnect to grant them.

@@ -26,6 +26,20 @@ test('a pathological schema cannot hang validation or exhaust the pool', async (
   await validateOutput(schema, { ok: true }, 2000)
 })
 
+test('stuck-worker retirement never holds a validation slot', async () => {
+  const evil = { type: 'string', pattern: '^(a+)+$' }
+  const started = Date.now()
+  // Fill every slot with a validator that ignores terminate(), then queue one
+  // healthy validation behind them. It must start when the timeouts fire, not
+  // after each stuck worker's retirement grace period.
+  const stuck = Array.from({ length: 4 }, () =>
+    assert.rejects(validateOutput(evil, 'a'.repeat(40) + '!', 250), /timed out or was cancelled/))
+  const queued = validateOutput(schema, { ok: true }, 4000)
+  await Promise.all([...stuck, queued])
+  const elapsed = Date.now() - started
+  assert.ok(elapsed < 900, `queued validation waited ${elapsed}ms; retirement must not hold slots`)
+})
+
 test('abort signals and asynchronous schemas are rejected', async () => {
   const controller = new AbortController()
   controller.abort()

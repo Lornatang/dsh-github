@@ -57,6 +57,10 @@ function spawnWorker(): PooledWorker {
   })
   // Idle or stuck workers must never keep the host process alive.
   worker.unref()
+  // A resource-limit kill (for example an OOM driven by an attacker-supplied
+  // schema) fires 'error' even after the task listeners are removed. Keep a
+  // permanent no-op listener so an abandoned worker can never crash the host.
+  worker.on('error', () => {})
   spawned += 1
   return { worker, retire: false }
 }
@@ -64,7 +68,6 @@ function spawnWorker(): PooledWorker {
 async function retireWorker(entry: PooledWorker): Promise<void> {
   spawned -= 1
   const { worker } = entry
-  worker.removeAllListeners()
   abandoned.add(worker)
   const termination = worker.terminate().then(() => { abandoned.delete(worker) }, () => { abandoned.delete(worker) })
   let grace: NodeJS.Timeout | undefined
@@ -131,10 +134,11 @@ export async function validateOutput(schema: unknown, value: unknown, timeoutMs:
       throw error
     }
   } finally {
-    if (entry) {
-      if (healthy && !entry.retire) idle.push(entry)
-      else await retireWorker(entry)
-    }
+    const keep = entry !== undefined && healthy && !entry.retire
+    if (entry && keep) idle.push(entry)
+    // Release the slot before any retirement wait: cleanup must never hold a
+    // validation slot while a stuck worker ignores terminate().
     release()
+    if (entry && !keep) await retireWorker(entry)
   }
 }
