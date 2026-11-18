@@ -24,6 +24,7 @@ const STRUCTURAL_KEYS = new Set(['type', 'text', 'annotations', 'priority', 'aud
 const CONTENT_TYPES = new Set(['text', 'image', 'audio', 'resource', 'resource_link'])
 
 const MAX_ERROR_CHARS = 500
+const MAX_SECRETS = 16
 const MIN_DISCOVERY_MS = 30_000
 const MAX_DISCOVERY_MS = 600_000
 
@@ -222,11 +223,40 @@ export class GithubBridge {
   // a later secret matched text inside it.
   #redactionPattern(): RegExp | null {
     if (this.#secretPattern !== undefined) return this.#secretPattern
+    this.#pruneSecrets()
     const secrets = [...new Set([...this.#secrets, ...this.#attemptSecrets])].filter(Boolean).sort((a, b) => b.length - a.length)
     this.#secretPattern = secrets.length ? new RegExp(secrets.map((secret) => secret.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g') : null
     return this.#secretPattern
   }
+  #hasSecret(value: unknown): boolean {
+    if (typeof value === 'string') return this.#redact(value) !== value
+    if (Array.isArray(value)) {
+      for (const part of value) if (this.#hasSecret(part)) return true
+      return false
+    }
+    if (value && typeof value === 'object') {
+      for (const [key, part] of Object.entries(value)) {
+        if (!STRUCTURAL_KEYS.has(key) && this.#redact(key) !== key) return true
+        if (key === 'type' && typeof part === 'string' && CONTENT_TYPES.has(part)) continue
+        if (this.#hasSecret(part)) return true
+      }
+    }
+    return false
+  }
+  // Rotation adds a new token per refresh, so an unbounded set would slowly
+  // grow the alternation and slow every redacted result. Insertion order tracks
+  // age, and the newest tokens are the ones a live client can still return.
+  #pruneSecrets(): void {
+    if (this.#secrets.size <= MAX_SECRETS) return
+    for (const secret of this.#secrets) {
+      if (this.#secrets.size <= MAX_SECRETS) break
+      this.#secrets.delete(secret)
+    }
+  }
   #redactValue(value: unknown): unknown {
+    // Most tool results contain no credential. Scanning first keeps the common
+    // path allocation-free instead of rebuilding the entire result graph.
+    if (!this.#hasSecret(value)) return value
     if (typeof value === 'string') return this.#redact(value)
     if (Array.isArray(value)) return value.map((part) => this.#redactValue(part))
     if (value && typeof value === 'object') {
@@ -398,10 +428,16 @@ export class GithubBridge {
       this.#register(client, tools, signal)
       if (!this.#active(generation)) throw new Error('connection cancelled')
       this.#status = 'ready'; this.#error = undefined
-      // Moving attempts into the active set leaves the union unchanged, so the
-      // cached redaction pattern stays valid.
-      for (const secret of this.#attemptSecrets) this.#secrets.add(secret)
+      // Retired credentials cannot appear in results from this client. Replace
+      // the redaction set instead of accumulating every token seen since start.
+      const activeSecrets = new Set(this.#attemptSecrets)
+      if (this.#oauth) {
+        activeSecrets.add(this.#oauth.accessToken)
+        if (this.#oauth.refreshToken) activeSecrets.add(this.#oauth.refreshToken)
+      }
+      this.#secrets = activeSecrets
       this.#attemptSecrets.clear()
+      this.#secretPattern = undefined
       this.#previousSource = undefined
       this.#previousStore = undefined
       this.#requiredScopes = undefined

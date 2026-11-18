@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.8
+
+- Assign stable ids to output schemas so warm validation workers skip re-sending and re-cloning an unchanged schema, and retire a worker when its compiled-schema cache is full.
+- Replace the redaction set on a new connection and cap it, and skip rebuilding a tool result that contains no credential.
+- Cap buffered upstream error bodies at 1 MiB, keeping the same reject-on-overflow behavior.
+
 ## 0.1.7
 
 - Remove unused credential-store helpers, the unused end-of-stream callback plumbing and a write-only token field; limits and cancellation behavior are unchanged.

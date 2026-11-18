@@ -44,7 +44,21 @@ function release(): void {
   next.resolve()
 }
 
-interface PooledWorker { worker: Worker; retire: boolean }
+// Schema objects are stable for the lifetime of a discovered tool. A numeric id
+// lets warm workers reuse a compiled validator without re-sending (and having
+// V8 re-clone) the schema on every call.
+const schemaIds = new WeakMap<object, number>()
+let nextSchemaId = 1
+function schemaIdOf(schema: unknown): number | undefined {
+  if (typeof schema !== 'object' || schema === null) return undefined
+  const known = schemaIds.get(schema)
+  if (known !== undefined) return known
+  const id = nextSchemaId++
+  schemaIds.set(schema, id)
+  return id
+}
+
+interface PooledWorker { worker: Worker; retire: boolean; schemas: Set<number> }
 const idle: PooledWorker[] = []
 let spawned = 0
 let nextTaskId = 1
@@ -62,7 +76,7 @@ function spawnWorker(): PooledWorker {
   // permanent no-op listener so an abandoned worker can never crash the host.
   worker.on('error', () => {})
   spawned += 1
-  return { worker, retire: false }
+  return { worker, retire: false, schemas: new Set() }
 }
 
 async function retireWorker(entry: PooledWorker): Promise<void> {
@@ -80,7 +94,7 @@ async function retireWorker(entry: PooledWorker): Promise<void> {
 
 class InvalidOutput extends Error {}
 
-function runTask(entry: PooledWorker, schema: unknown, value: unknown, signal: AbortSignal): Promise<void> {
+function runTask(entry: PooledWorker, schema: unknown, schemaId: number | undefined, value: unknown, signal: AbortSignal): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const id = nextTaskId++
     const { worker } = entry
@@ -90,9 +104,12 @@ function runTask(entry: PooledWorker, schema: unknown, value: unknown, signal: A
       worker.off('exit', onExit)
       signal.removeEventListener('abort', onAbort)
     }
-    const onMessage = (message: { id?: number; valid?: boolean; error?: string; retire?: boolean }): void => {
+    const onMessage = (message: { id?: number; valid?: boolean; error?: string; retire?: boolean; cached?: boolean }): void => {
       if (message.id !== id) return
       entry.retire = message.retire === true
+      // Record the schema only after the worker confirms it compiled it: a
+      // rejected schema must keep arriving with the next task.
+      if (message.cached === true && schemaId !== undefined) entry.schemas.add(schemaId)
       cleanup()
       if (message.valid) resolve()
       else reject(new InvalidOutput(message.error ?? 'invalid output'))
@@ -105,7 +122,9 @@ function runTask(entry: PooledWorker, schema: unknown, value: unknown, signal: A
     worker.on('exit', onExit)
     if (signal.aborted) { onAbort(); return }
     signal.addEventListener('abort', onAbort, { once: true })
-    try { worker.postMessage({ id, schema, value }) } catch (error) {
+    // Send the schema only when this worker has not compiled it yet.
+    const missing = schemaId === undefined || !entry.schemas.has(schemaId)
+    try { worker.postMessage(missing ? { id, schemaId, schema, value } : { id, schemaId, value }) } catch (error) {
       cleanup()
       reject(error instanceof Error ? error : new Error(String(error)))
     }
@@ -114,16 +133,20 @@ function runTask(entry: PooledWorker, schema: unknown, value: unknown, signal: A
 
 export async function validateOutput(schema: unknown, value: unknown, timeoutMs: number, signal?: AbortSignal): Promise<void> {
   if (abandoned.size >= MAX_ABANDONED) throw new Error('github: output validation is unavailable; previous validators did not stop')
+  // Queue wait is bounded separately, so the validation timeout measures only
+  // worker work; a queued caller is still released by its cancellation signal.
+  const queueTimeout = AbortSignal.timeout(Math.min(timeoutMs, 5000))
+  const queueSignal = signal ? AbortSignal.any([signal, queueTimeout]) : queueTimeout
+  await acquire(queueSignal)
   const timeout = AbortSignal.timeout(Math.min(timeoutMs, 5000))
   const combined = signal ? AbortSignal.any([signal, timeout]) : timeout
-  await acquire(combined)
   let entry: PooledWorker | undefined
   let healthy = false
   try {
     if (combined.aborted) throw new Error('github: output validation timed out or was cancelled')
     entry = idle.pop() ?? spawnWorker()
     try {
-      await runTask(entry, schema, value, combined)
+      await runTask(entry, schema, schemaIdOf(schema), value, combined)
       healthy = true
     } catch (error) {
       if (error instanceof InvalidOutput) {
