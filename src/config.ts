@@ -11,6 +11,7 @@ export interface Config {
   readOnly: boolean
   credentialSource: 'saved' | 'env' | 'gh'
   oauthClientId: string
+  oauthScopes: string
 }
 
 export const Config = z.object({
@@ -21,4 +22,5 @@ export const Config = z.object({
   readOnly: z.boolean().default(false),
   credentialSource: z.union(['saved', 'env', 'gh']).default('saved'),
   oauthClientId: z.string().default(DEFAULT_GITHUB_OAUTH_CLIENT_ID),
+  oauthScopes: z.string().default(''),
 })

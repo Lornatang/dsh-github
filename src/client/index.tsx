@@ -3,7 +3,7 @@ import * as React from 'react'
 const h = React.createElement
 const prefix = '/plugins/github'
 interface ClientContext { slots: { inject(name: string, callback: () => unknown): () => void; register(options: Record<string, unknown>, component: React.ComponentType<never>): unknown } }
-interface Snapshot { ok: boolean; status: 'idle' | 'connecting' | 'authorizing' | 'ready' | 'error'; error?: string; warning?: string; toolCount: number; source?: string; readOnly: boolean; oauthAvailable: boolean; requiredScopes?: string[]; authorization?: { userCode: string; verificationUri: string } }
+interface Snapshot { ok: boolean; status: 'idle' | 'connecting' | 'authorizing' | 'ready' | 'error'; error?: string; warning?: string; toolCount: number; source?: string; readOnly: boolean; oauthAvailable: boolean; requiredScopes?: string[]; scopes?: string[]; authorization?: { userCode: string; verificationUri: string } }
 
 if (typeof document !== 'undefined' && !document.querySelector('style[data-dsh-github]')) {
   const style = document.createElement('style')
@@ -38,6 +38,7 @@ export function GithubSettings(): React.ReactElement {
   const [error, setError] = React.useState('')
   const [token, setToken] = React.useState('')
   const [busy, setBusy] = React.useState(false)
+  const [copied, setCopied] = React.useState(false)
   const refresh = React.useCallback(async () => {
     try { setSnapshot(await api('/status')); setError('') }
     catch (err) { setError(err instanceof Error ? err.message : 'Unable to load status') }
@@ -58,6 +59,13 @@ export function GithubSettings(): React.ReactElement {
     catch (err) { setError(err instanceof Error ? err.message : 'Connection failed') }
     finally { setBusy(false) }
   }
+  const connectOAuth = (): void => { window.open('https://github.com/login/device', '_blank', 'noopener,noreferrer'); void act('connect', { source: 'oauth' }) }
+  const copyCode = (): void => {
+    const code = snapshot?.authorization?.userCode
+    if (!code || !navigator.clipboard) return
+    void navigator.clipboard.writeText(code).then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 2000) }).catch(() => undefined)
+  }
+  const sourceLabels: Record<string, string> = { oauth: 'GitHub OAuth', token: 'personal access token', gh: 'GitHub CLI', env: 'GITHUB_TOKEN environment variable' }
   const status = snapshot?.status ?? 'loading'
   const labels = { loading: 'Loading', idle: 'Not connected', connecting: 'Connecting', authorizing: 'Waiting for GitHub authorization', ready: 'Connected', error: 'Connection failed' }
   const connecting = busy || status === 'connecting' || status === 'authorizing'
@@ -70,11 +78,14 @@ export function GithubSettings(): React.ReactElement {
         h('div', { className: 'dsg-status-copy' }, h('strong', null, labels[status])),
         h('span', { className: 'dsg-count' }, `${String(snapshot?.toolCount ?? 0)} tools available`)),
       h('p', { className: 'dsg-note' }, snapshot?.readOnly ? 'Read-only mode is enabled.' : 'Agents use your GitHub permissions. Write operations require approval.'),
+      status === 'ready' && snapshot?.source ? h('p', { className: 'dsg-note' }, `Credential: ${sourceLabels[snapshot.source] ?? snapshot.source}${snapshot.scopes?.length ? ` · granted scopes: ${snapshot.scopes.join(', ')}` : ''}`) : null,
       error || snapshot?.error ? h('p', { className: 'dsg-error', role: 'alert' }, error || snapshot?.error) : null,
       snapshot?.warning ? h('p', { className: 'dsg-error', role: 'alert' }, snapshot.warning) : null,
-      snapshot?.requiredScopes?.length ? h('p', { className: 'dsg-error', role: 'alert' }, `GitHub requires additional permissions: ${snapshot.requiredScopes.join(', ')}. Connect with GitHub to review them, then retry the operation.`) : null,
+      snapshot?.requiredScopes?.length ? h('div', { className: 'dsg-error', role: 'alert' },
+        h('p', null, `GitHub requires additional permissions: ${snapshot.requiredScopes.join(', ')}. Reconnect to review them on GitHub, then retry the operation.`),
+        h('div', { className: 'dsg-actions' }, h('button', { className: 'dsg-button', disabled: connecting || !snapshot?.oauthAvailable, onClick: connectOAuth }, 'Reconnect now'))) : null,
       h('div', { className: 'dsg-actions' },
-        h('button', { className: 'dsg-button primary', disabled: connecting || !snapshot?.oauthAvailable, onClick: () => { window.open('https://github.com/login/device', '_blank', 'noopener,noreferrer'); void act('connect', { source: 'oauth' }) } }, 'Connect with GitHub'),
+        h('button', { className: 'dsg-button primary', disabled: connecting || !snapshot?.oauthAvailable, onClick: connectOAuth }, 'Connect with GitHub'),
         h('button', { className: 'dsg-button', disabled: connecting, onClick: () => { void act('connect', { source: 'gh' }) } }, 'Connect with GitHub CLI'),
         status !== 'idle' && status !== 'loading' ? h('button', { className: 'dsg-button', disabled: busy, onClick: () => { void act(status === 'authorizing' ? 'cancel' : 'disconnect', {}) } }, status === 'authorizing' ? 'Cancel' : 'Disconnect') : null,
         h('button', { className: 'dsg-button', disabled: busy, onClick: () => { void refresh() } }, 'Refresh status')),
@@ -82,7 +93,8 @@ export function GithubSettings(): React.ReactElement {
       status === 'authorizing' && snapshot?.authorization ? h('div', { className: 'dsg-auth' },
         h('p', null, 'Enter this one-time code on GitHub, then approve the requested access:'),
         h('code', { className: 'dsg-code' }, snapshot.authorization.userCode),
-        h('div', { className: 'dsg-actions' }, h('a', { className: 'dsg-button', href: 'https://github.com/login/device', target: '_blank', rel: 'noopener noreferrer' }, 'Open GitHub')),
+        h('div', { className: 'dsg-actions' }, h('a', { className: 'dsg-button', href: 'https://github.com/login/device', target: '_blank', rel: 'noopener noreferrer' }, 'Open GitHub'),
+          h('button', { className: 'dsg-button', onClick: copyCode }, copied ? 'Copied' : 'Copy code')),
         h('p', { className: 'dsg-note' }, 'The connection will continue automatically after authorization.')) : null,
       h('p', { className: 'dsg-note' }, 'GitHub CLI must be installed and signed in on the DSH host.'),
       h('hr', { className: 'dsg-separator' }),

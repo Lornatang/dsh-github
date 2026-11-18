@@ -30,7 +30,7 @@ export interface BridgeHost {
 export interface BridgeOptions extends Config { store: SessionStore }
 export type ConnectInput = { source: 'token'; token: string } | { source: 'gh' | 'oauth' }
 export type BridgeStatus = 'idle' | 'connecting' | 'authorizing' | 'ready' | 'error'
-export interface BridgeSnapshot { status: BridgeStatus; toolCount: number; source?: 'token' | 'gh' | 'env' | 'oauth'; error?: string; warning?: string; readOnly: boolean; oauthAvailable: boolean; requiredScopes?: string[]; authorization?: { userCode: string; verificationUri: string } }
+export interface BridgeSnapshot { status: BridgeStatus; toolCount: number; source?: 'token' | 'gh' | 'env' | 'oauth'; error?: string; warning?: string; readOnly: boolean; oauthAvailable: boolean; requiredScopes?: string[]; scopes?: string[]; authorization?: { userCode: string; verificationUri: string } }
 type DiscoveredTool = { name: string; description?: string; inputSchema: unknown; outputSchema?: unknown; annotations?: { readOnlyHint?: boolean } }
 type OAuthSession = OAuthTokens & { clientId: string; persisted: boolean; pendingSave?: boolean }
 
@@ -86,10 +86,12 @@ export class GithubBridge {
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(options.serverName)) throw new Error('github: invalid serverName')
     // Validate the origin and toolset before accepting any credential.
     createGithubFetch(new URL(options.url), 'validation-token', options.toolsets, options.readOnly)
+    const extraScopes = (options.oauthScopes ?? '').trim()
+    if (extraScopes && !parseRequestedScopes(extraScopes)) throw new Error('github: invalid oauthScopes; use comma-separated GitHub OAuth scope names')
   }
 
   snapshot(): BridgeSnapshot {
-    return { status: this.#status, toolCount: this.#tools.size, source: this.#source, error: this.#error, warning: this.#warning, readOnly: this.#options.readOnly, oauthAvailable: !!this.#oauthClientId(), requiredScopes: this.#requiredScopes, authorization: this.#authorization }
+    return { status: this.#status, toolCount: this.#tools.size, source: this.#source, error: this.#error, warning: this.#warning, readOnly: this.#options.readOnly, oauthAvailable: !!this.#oauthClientId(), requiredScopes: this.#requiredScopes, scopes: this.#source === 'oauth' ? this.#oauth?.scopes ?? this.#options.store.current.oauthScopes : undefined, authorization: this.#authorization }
   }
 
   requiresApproval(name: string): boolean { return this.#tools.get(name)?.approval === true }
@@ -125,7 +127,7 @@ export class GithubBridge {
         if (input.source === 'oauth') {
           this.#status = 'connecting'; this.#source = 'oauth'; this.#error = undefined
           const clientId = this.#oauthClientId()
-          const authorization = await startDeviceAuthorization(clientId, this.#controller.signal, [...(previousScopes ?? []), ...(this.#requiredScopes ?? [])])
+          const authorization = await startDeviceAuthorization(clientId, this.#controller.signal, [...(previousScopes ?? []), ...(this.#requiredScopes ?? []), ...(parseRequestedScopes(this.#options.oauthScopes ?? '') ?? [])])
           if (!this.#active(generation)) return
           this.#status = 'authorizing'
           this.#authorization = { userCode: authorization.userCode, verificationUri: authorization.verificationUri }

@@ -28,6 +28,7 @@ export interface BridgeSnapshot {
     readOnly: boolean;
     oauthAvailable: boolean;
     requiredScopes?: string[];
+    scopes?: string[];
     authorization?: {
         userCode: string;
         verificationUri: string;

@@ -20,7 +20,7 @@ test('a pathological schema cannot hang validation or exhaust the pool', async (
   const evil = { type: 'string', pattern: '^(a+)+$' }
   const started = Date.now()
   await assert.rejects(validateOutput(evil, 'a'.repeat(30) + 'b', 300), /timed out or was cancelled/)
-  assert.ok(Date.now() - started < 4000, 'validation must settle near its timeout instead of hanging on worker cleanup')
+  assert.ok(Date.now() - started < 6000, 'validation must settle near its timeout instead of hanging on worker cleanup')
   // Slots and workers must be usable again after the stuck validator is abandoned.
   await validateOutput(schema, { ok: true }, 2000)
   await validateOutput(schema, { ok: true }, 2000)

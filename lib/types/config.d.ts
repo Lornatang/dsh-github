@@ -9,6 +9,7 @@ export interface Config {
     readOnly: boolean;
     credentialSource: 'saved' | 'env' | 'gh';
     oauthClientId: string;
+    oauthScopes: string;
 }
 export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     serverName: z<string, string, "defined">;
@@ -18,6 +19,7 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     readOnly: z<boolean, boolean, "defined">;
     credentialSource: z<"saved" | "env" | "gh", "saved" | "env" | "gh", "defined">;
     oauthClientId: z<string, string, "defined">;
+    oauthScopes: z<string, string, "defined">;
 }>>, Schemastery.ObjectT<NoInfer<{
     serverName: z<string, string, "defined">;
     url: z<string, string, "defined">;
@@ -26,4 +28,5 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     readOnly: z<boolean, boolean, "defined">;
     credentialSource: z<"saved" | "env" | "gh", "saved" | "env" | "gh", "defined">;
     oauthClientId: z<string, string, "defined">;
+    oauthScopes: z<string, string, "defined">;
 }>>, "plain">;

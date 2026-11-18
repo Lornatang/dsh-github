@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.4
+
+- Request the `read:user` and `notifications` OAuth scopes by default so profile and notification tools work after browser sign-in. Existing sessions need one reconnect to grant them.
+- Add an `oauthScopes` configuration field for requesting extra device-flow scopes such as `gist` or `read:packages`; invalid scope names are rejected at startup.
+- Settings page: show the credential source and granted scopes while connected, add a one-click **Reconnect now** button to the additional-permissions banner, and add a **Copy code** button for the device authorization code.
+
 ## 0.1.3
 
 - Request the `workflow` OAuth scope by default so browser-authorized tokens can create and update files under `.github/workflows`.
