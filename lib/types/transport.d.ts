@@ -3,6 +3,5 @@ import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js';
 export declare function createGithubFetch(server: URL, token: string | (() => Promise<string>), toolsets: string, readOnly: boolean, options?: {
     onLimit?: () => void;
     onEvent?: () => void;
-    onStreamEnd?: () => void;
     onInsufficientScope?: (scope: string) => string | undefined;
 }): FetchLike;

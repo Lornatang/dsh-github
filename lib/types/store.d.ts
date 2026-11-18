@@ -17,7 +17,5 @@ export declare class SessionStore {
     get current(): StoredSession;
     load(): Promise<StoredSession>;
     patch(patch: Partial<StoredSession>, active?: () => boolean): Promise<void>;
-    clear(...fields: readonly (keyof StoredSession)[]): Promise<void>;
-    clearIf(active: (() => boolean) | undefined, ...fields: readonly (keyof StoredSession)[]): Promise<void>;
     destroy(): Promise<void>;
 }

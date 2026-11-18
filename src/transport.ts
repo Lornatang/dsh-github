@@ -8,7 +8,7 @@ function isLoopback(url: URL): boolean {
 
 /** Keep credentials on the configured origin and never follow redirects implicitly. */
 export function createGithubFetch(server: URL, token: string | (() => Promise<string>), toolsets: string, readOnly: boolean,
-  options: { onLimit?: () => void; onEvent?: () => void; onStreamEnd?: () => void; onInsufficientScope?: (scope: string) => string | undefined } = {}): FetchLike {
+  options: { onLimit?: () => void; onEvent?: () => void; onInsufficientScope?: (scope: string) => string | undefined } = {}): FetchLike {
   const allowed = (url: URL): boolean => !url.username && !url.password &&
     (url.protocol === 'https:' || (url.protocol === 'http:' && isLoopback(server) && isLoopback(url))) &&
     url.origin === server.origin
@@ -34,6 +34,6 @@ export function createGithubFetch(server: URL, token: string | (() => Promise<st
         if (message) { await response.body?.cancel(); throw new Error(message) }
       }
     }
-    return limitResponse(response, MAX_RESPONSE_BYTES, options.onLimit ?? (() => undefined), options.onStreamEnd, options.onEvent)
+    return limitResponse(response, MAX_RESPONSE_BYTES, options.onLimit ?? (() => undefined), options.onEvent)
   }
 }

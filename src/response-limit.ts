@@ -75,21 +75,7 @@ function copyResponse(source: Response, body: ConstructorParameters<typeof Respo
   return response
 }
 
-function observeEnd(body: ReadableStream<Uint8Array>, onEnd: () => void): ReadableStream<Uint8Array> {
-  const reader = body.getReader()
-  return new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      try {
-        const result = await reader.read()
-        if (result.done) { onEnd(); controller.close() }
-        else controller.enqueue(result.value)
-      } catch (error) { onEnd(); controller.error(error) }
-    },
-    cancel(reason) { return reader.cancel(reason) },
-  })
-}
-
-export async function limitResponse(source: Response, maxBytes: number, onLimit: LimitExceeded, onStreamEnd?: () => void, onEvent?: () => void): Promise<Response> {
+export async function limitResponse(source: Response, maxBytes: number, onLimit: LimitExceeded, onEvent?: () => void): Promise<Response> {
   if (!source.body) return source
   // The SDK catches errors from response.text() on some authorization paths.
   // Read error responses here so an oversized body cannot be swallowed there.
@@ -100,8 +86,7 @@ export async function limitResponse(source: Response, maxBytes: number, onLimit:
     return copyResponse(source, bytes.byteLength ? bytes : null)
   }
   const events = source.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase() === 'text/event-stream'
-  const body = events && onStreamEnd ? observeEnd(source.body, onStreamEnd) : source.body
-  const response = copyResponse(source, limitStream(body, maxBytes, events, onLimit, onEvent))
+  const response = copyResponse(source, limitStream(source.body, maxBytes, events, onLimit, onEvent))
   if (events) {
     // OAuth endpoints are parsed as a whole even if they claim to be SSE.
     // Whole-body consumers need a total limit in addition to the event limit.

@@ -74,7 +74,6 @@ export class GithubBridge {
   #source?: 'token' | 'gh' | 'env' | 'oauth'
   #error?: string
   #warning?: string
-  #token?: string
   #authorization?: { userCode: string; verificationUri: string }
   #requiredScopes?: string[]
   #previousSource?: 'token' | 'gh' | 'env' | 'oauth'
@@ -158,7 +157,7 @@ export class GithubBridge {
     await this.#enqueue(async () => {
       await this.#shutdownClient()
       if (!this.#active(generation)) return
-      this.#status = 'idle'; this.#source = undefined; this.#error = undefined; this.#token = undefined
+      this.#status = 'idle'; this.#source = undefined; this.#error = undefined
       try {
         if (previousStore && this.#options.store.current !== previousStore) {
           await this.#options.store.patch({ source: previousStore.source, token: previousStore.token, oauthClientId: previousStore.oauthClientId, oauthRefreshToken: previousStore.oauthRefreshToken, oauthExpiresAt: previousStore.oauthExpiresAt, oauthScopes: previousStore.oauthScopes }, () => this.#active(generation))
@@ -182,7 +181,7 @@ export class GithubBridge {
       try { await this.#options.store.destroy() }
       catch (error) { this.#fail(generation, error); return }
       if (!this.#active(generation)) return
-      this.#status = 'idle'; this.#source = undefined; this.#error = undefined; this.#token = undefined; this.#requiredScopes = undefined
+      this.#status = 'idle'; this.#source = undefined; this.#error = undefined; this.#requiredScopes = undefined
     })
     return this.snapshot()
   }
@@ -193,7 +192,7 @@ export class GithubBridge {
     if (this.#disposed) return
     this.#disposed = true
     this.#invalidate()
-    await this.#enqueue(async () => { await this.#shutdownClient(); this.#token = undefined; this.#secrets.clear(); this.#attemptSecrets.clear(); this.#secretPattern = undefined })
+    await this.#enqueue(async () => { await this.#shutdownClient(); this.#secrets.clear(); this.#attemptSecrets.clear(); this.#secretPattern = undefined })
   }
 
   #active(generation: number): boolean { return !this.#disposed && generation === this.#generation }
@@ -302,7 +301,6 @@ export class GithubBridge {
         this.#secretPattern = undefined
         const scopes = next.scopes ?? session.scopes
         Object.assign(session, next, { scopes })
-        this.#token = next.accessToken
         if (session.persisted) session.pendingSave = true
       }
       if (session.pendingSave) {
@@ -351,7 +349,6 @@ export class GithubBridge {
       token = await this.#oauthToken(generation)
     }
     if (!this.#active(generation)) return
-    this.#token = token
     const client = new Client({ name: 'dsh-github', version: CLIENT_VERSION }, { jsonSchemaValidator: deferredOutputValidation })
     let events = 0
     let since = Date.now()

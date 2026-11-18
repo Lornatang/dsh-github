@@ -26,7 +26,7 @@ async function drain(response) {
 test('passes SSE bytes through and counts events across split CRLF separators', async () => {
   let events = 0
   const text = 'data: a\r\n\r\ndata: b\n\n'
-  const response = await limitResponse(streamResponse(['data: a\r', '\n\r', '\ndata: b\n', '\n']), 1024, () => assert.fail('limit'), undefined, () => { events++ })
+  const response = await limitResponse(streamResponse(['data: a\r', '\n\r', '\ndata: b\n', '\n']), 1024, () => assert.fail('limit'), () => { events++ })
   assert.equal(await drain(response), text)
   assert.equal(events, 2)
 })
@@ -34,13 +34,13 @@ test('passes SSE bytes through and counts events across split CRLF separators', 
 test('CR-only separators and comment lines follow SSE event accounting', async () => {
   let events = 0
   let limits = 0
-  const response = await limitResponse(streamResponse(['data: a\r', '\rdata: b\r\r']), 1024, () => { limits++ }, undefined, () => { events++ })
+  const response = await limitResponse(streamResponse(['data: a\r', '\rdata: b\r\r']), 1024, () => { limits++ }, () => { events++ })
   assert.equal(await drain(response), 'data: a\r\rdata: b\r\r')
   assert.equal(events, 2)
   assert.equal(limits, 0)
   // Comment lines rewind the per-event budget, so keepalives never trip it.
   let commentEvents = 0
-  const comments = await limitResponse(streamResponse([': keepalive\n', ': keepalive\n', '\n', 'data: ok\n\n']), 16, () => assert.fail('limit'), undefined, () => { commentEvents++ })
+  const comments = await limitResponse(streamResponse([': keepalive\n', ': keepalive\n', '\n', 'data: ok\n\n']), 16, () => assert.fail('limit'), () => { commentEvents++ })
   assert.equal(await drain(comments), ': keepalive\n: keepalive\n\ndata: ok\n\n')
   assert.equal(commentEvents, 2)
 })
@@ -56,7 +56,7 @@ test('limits a single oversized event and separator-free bulk chunks alike', asy
   await assert.rejects(drain(bulk), /byte limit/)
   assert.equal(bulkLimits, 1)
   let events = 0
-  const ok = await limitResponse(streamResponse(['data: ', ...Array.from({ length: 10 }, () => 'y'.repeat(100)), '\n\n']), 2000, () => assert.fail('limit'), undefined, () => { events++ })
+  const ok = await limitResponse(streamResponse(['data: ', ...Array.from({ length: 10 }, () => 'y'.repeat(100)), '\n\n']), 2000, () => assert.fail('limit'), () => { events++ })
   assert.equal((await drain(ok)).length, 1008)
   assert.equal(events, 1)
 })

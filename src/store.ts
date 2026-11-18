@@ -164,20 +164,6 @@ export class SessionStore {
     })
   }
 
-  async clear(...fields: readonly (keyof StoredSession)[]): Promise<void> {
-    await this.clearIf(undefined, ...fields)
-  }
-
-  async clearIf(active: (() => boolean) | undefined, ...fields: readonly (keyof StoredSession)[]): Promise<void> {
-    await this.#serialize(async () => {
-      if (active && !active()) throw new Error('github: connection cancelled')
-      const next: StoredSession = { ...this.#value, version: 1 }
-      for (const field of fields) if (field !== 'version') delete next[field]
-      await this.#flush(next, active)
-      this.#value = next
-    })
-  }
-
   async destroy(): Promise<void> {
     await this.#serialize(async () => {
       if (await secureDirectory(dirname(this.#file), false)) {

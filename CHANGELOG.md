@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.7
+
+- Remove unused credential-store helpers, the unused end-of-stream callback plumbing and a write-only token field; limits and cancellation behavior are unchanged.
+
 ## 0.1.6
 
 - Fail closed when the host does not expose the tool approval hook: only tools marked read-only register, so a host without `tools/pre-execute` cannot run writes without approval.
