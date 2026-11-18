@@ -524,3 +524,41 @@ test('prompts for additional GitHub scopes and uses them on explicit reauthoriza
 test('recognizes GitHub MCP enterprise authorization scopes', () => {
   assert.deepEqual(parseRequestedScopes('repo read:enterprise admin:enterprise'), ['repo', 'read:enterprise', 'admin:enterprise'])
 })
+
+test('requests the workflow scope by default and guides reauthorization after a workflow refusal', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-github-oauth-workflow-'))
+  const mcp = await startMockMcp({ workflowRefusal: true })
+  const file = sessionFileFor('github', mcp.url, join(root, 'cordis.patch.yml'))
+  const registered = new Map()
+  const host = { logger: { info() {}, warn() {}, error() {} }, register(tool) { registered.set(tool.name, tool); return () => registered.delete(tool.name) } }
+  const config = { serverName: 'github', url: mcp.url, toolCallTimeoutMs: 2000, toolsets: 'repos,issues', readOnly: false, credentialSource: 'saved', oauthClientId: 'Iv1.testClientId', store: new SessionStore(file) }
+  const bridge = new GithubBridge(host, config)
+  const originalFetch = globalThis.fetch
+  const requestedScopes = []
+  globalThis.fetch = async (value, init) => {
+    const url = new URL(value)
+    if (url.origin !== 'https://github.com') return originalFetch(value, init)
+    if (url.pathname === '/login/device/code') {
+      requestedScopes.push(new URLSearchParams(init.body).get('scope'))
+      return Response.json({ device_code: 'secret-device-code', user_code: 'ABCD-EFGH', verification_uri: 'https://github.com/login/device', expires_in: 30, interval: 1 })
+    }
+    return Response.json({ access_token: 'testtoken', token_type: 'bearer' })
+  }
+  try {
+    await bridge.start()
+    assert.equal((await bridge.connect({ source: 'oauth' })).status, 'authorizing')
+    await waitUntil(() => bridge.snapshot().status === 'ready')
+    assert.ok(new Set(requestedScopes[0].split(' ')).has('workflow'))
+    await assert.rejects(registered.get('mcp__github__push_files').execute({}, {}), /additional permissions \(workflow\).*Connect again/)
+    assert.deepEqual(bridge.snapshot().requiredScopes, ['workflow'])
+    assert.equal((await bridge.connect({ source: 'oauth' })).status, 'authorizing')
+    assert.deepEqual(new Set(requestedScopes[1].split(' ')), new Set(['repo', 'read:org', 'workflow']))
+    await waitUntil(() => bridge.snapshot().status === 'ready')
+    assert.equal(bridge.snapshot().requiredScopes, undefined)
+  } finally {
+    globalThis.fetch = originalFetch
+    await bridge.dispose()
+    await mcp.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})

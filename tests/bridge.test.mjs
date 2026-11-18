@@ -199,3 +199,13 @@ test('redacts credentials from multi-megabyte tool output in one pass', async ()
     assert.equal(text.length, 2_000_000 + 1 + '[REDACTED]'.length)
   } finally { await f.close() }
 })
+
+test('workflow scope refusals pass through unchanged for non-OAuth credentials', async () => {
+  const f = await fixture({ workflowRefusal: true })
+  try {
+    await f.bridge.start()
+    assert.equal((await f.bridge.connect({ source: 'token', token: 'testtoken' })).status, 'ready')
+    await assert.rejects(f.definitions.get('mcp__github__push_files').execute({}, {}), /without `workflow` scope/)
+    assert.equal(f.bridge.snapshot().requiredScopes, undefined)
+  } finally { await f.close() }
+})

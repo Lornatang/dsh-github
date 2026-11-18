@@ -1,6 +1,6 @@
 import { createServer } from 'node:http'
 
-export async function startMockMcp({ token = 'testtoken', initializeDelay = 0, duplicate = false, structured = false, structuredOnly = false, scopeChallenge = false, contentAnnotations = false, largeText = 0 } = {}) {
+export async function startMockMcp({ token = 'testtoken', initializeDelay = 0, duplicate = false, structured = false, structuredOnly = false, scopeChallenge = false, contentAnnotations = false, largeText = 0, workflowRefusal = false } = {}) {
   const requests = []
   const calls = []
   const state = { clientInfo: undefined }
@@ -38,7 +38,9 @@ export async function startMockMcp({ token = 'testtoken', initializeDelay = 0, d
     } else if (message.method === 'tools/list') result = { tools: definitions }
     else if (message.method === 'tools/call') {
       calls.push({ name: message.params.name, arguments: message.params.arguments })
-      result = message.params.name === 'structured'
+      result = workflowRefusal && message.params.name === 'push_files'
+        ? { isError: true, content: [{ type: 'text', text: 'refusing to allow an OAuth App to create or update workflow `.github/workflows/ci.yml` without `workflow` scope' }] }
+        : message.params.name === 'structured'
         ? { content: structuredOnly ? [] : [{ type: 'text', text: 'structured' }], structuredContent: { ok: message.params.arguments?.bad ? 'invalid' : true, count: 1 } }
         : message.params.arguments?.path === 'fail'
         ? { isError: true, content: [{ type: 'text', text: `Permission denied for ${supplied}` }] }

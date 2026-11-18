@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.3
+
+- Request the `workflow` OAuth scope by default so browser-authorized tokens can create and update files under `.github/workflows`.
+- Detect GitHub's workflow-scope refusal in tool errors (which arrive as tool results, not HTTP scope challenges) and show the same reconnect-with-permissions guidance for OAuth sessions. Existing sessions need one reconnect to grant the new scope.
+
 ## 0.1.2
 
 - Speed up credential redaction with a cached single-pass pattern instead of per-string secret scans, and reuse pooled validation workers instead of spawning one per structured tool call.

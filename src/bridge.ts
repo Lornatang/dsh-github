@@ -440,7 +440,14 @@ export class GithubBridge {
               if (result.structuredContent === undefined) return { content: [] }
               return { content: [{ type: 'text', text: JSON.stringify(this.#redactValue(result.structuredContent)) }] }
             } catch (error) {
-              throw new Error(this.#redact(error instanceof Error ? error.message : 'GitHub MCP tool failed'))
+              const message = this.#redact(error instanceof Error ? error.message : 'GitHub MCP tool failed')
+              // GitHub reports workflow-write refusals as tool errors, not HTTP
+              // scope challenges, so route them into the same reauthorization flow.
+              if (!connectionSignal.aborted && this.#source === 'oauth' && /without `?workflow`? scope/.test(message)) {
+                this.#requiredScopes = [...new Set([...(this.#requiredScopes ?? []), 'workflow'])]
+                throw new Error(`GitHub requires additional permissions (${this.#requiredScopes.join(', ')}). Connect again in GitHub settings, approve them, and retry the operation.`)
+              }
+              throw new Error(message)
             }
           },
         } as ToolDefinition
