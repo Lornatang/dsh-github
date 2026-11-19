@@ -2,6 +2,7 @@ import * as React from 'react'
 
 const h = React.createElement
 const prefix = '/plugins/github'
+const STATUS_TIMEOUT_MS = 10_000
 interface ClientContext { slots: { inject(name: string, callback: () => unknown): () => void; register(options: Record<string, unknown>, component: React.ComponentType<never>): unknown } }
 interface Snapshot { ok: boolean; status: 'idle' | 'connecting' | 'authorizing' | 'ready' | 'error'; error?: string; warning?: string; toolCount: number; source?: string; readOnly: boolean; oauthAvailable: boolean; requiredScopes?: string[]; scopes?: string[]; authorization?: { userCode: string; verificationUri: string } }
 
@@ -41,11 +42,14 @@ export function GithubSettings(): React.ReactElement {
   const [token, setToken] = React.useState('')
   const [busy, setBusy] = React.useState(false)
   const [copied, setCopied] = React.useState(false)
-  const statusRequest = React.useRef<AbortController | null>(null)
+  const statusRequest = React.useRef<{ controller: AbortController; timer: number } | null>(null)
   const pendingAction = React.useRef<symbol | null>(null)
   const cancelRefresh = React.useCallback(() => {
-    statusRequest.current?.abort()
+    const request = statusRequest.current
+    if (!request) return
     statusRequest.current = null
+    window.clearTimeout(request.timer)
+    request.controller.abort()
   }, [])
   const refresh = React.useCallback(async (replace = false) => {
     if (pendingAction.current || document.hidden) return
@@ -53,17 +57,26 @@ export function GithubSettings(): React.ReactElement {
       if (!replace) return
       cancelRefresh()
     }
-    const request = new AbortController()
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => {
+      if (statusRequest.current !== request) return
+      cancelRefresh()
+      setError('GitHub status request timed out')
+    }, STATUS_TIMEOUT_MS)
+    const request = { controller, timer }
     statusRequest.current = request
     try {
-      const value = await api('/status', undefined, request.signal)
+      const value = await api('/status', undefined, controller.signal)
       if (statusRequest.current !== request) return
       setSnapshot(value)
       setError('')
     } catch (err) {
       if (statusRequest.current === request) setError(err instanceof Error ? err.message : 'Unable to load status')
     } finally {
-      if (statusRequest.current === request) statusRequest.current = null
+      if (statusRequest.current === request) {
+        window.clearTimeout(timer)
+        statusRequest.current = null
+      }
     }
   }, [cancelRefresh])
   React.useEffect(() => {

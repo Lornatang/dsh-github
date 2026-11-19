@@ -13,6 +13,7 @@ function settings() {
   const hooks = []
   const requests = []
   const timers = new Set()
+  const deadlines = new Set()
   let cursor
   let mountEffect
   let cleanup
@@ -39,6 +40,8 @@ function settings() {
     open() {},
     setInterval(fn) { timers.add(fn); return fn },
     clearInterval(fn) { timers.delete(fn) },
+    setTimeout(fn) { deadlines.add(fn); return fn },
+    clearTimeout(fn) { deadlines.delete(fn) },
   }
   runInNewContext(bundle, { document, window, AbortController, fetch(path, options) {
     const { promise, resolve, reject } = Promise.withResolvers()
@@ -55,6 +58,12 @@ function settings() {
   return {
     requests,
     tick: () => { for (const poll of timers) poll() },
+    expireRequests() {
+      for (const expire of [...deadlines]) {
+        deadlines.delete(expire)
+        expire()
+      }
+    },
     click: (label) => [...nodes(render())].find((node) => node?.children?.includes(label)).props.onClick(),
     text: () => [...nodes(render())].filter((node) => typeof node === 'string').join(' '),
     hide(hidden) { document.hidden = hidden; visibilityChange?.() },
@@ -121,5 +130,24 @@ test('manual refresh replaces an older pending status request', async () => {
   await setImmediate()
   assert.match(ui.text(), /Connected/)
   assert.doesNotMatch(ui.text(), /Old request failed/)
+  ui.unmount()
+})
+
+test('automatic polling retries after a stalled status request expires', async () => {
+  const ui = settings()
+  const stalled = ui.requests[0]
+  ui.tick()
+  assert.equal(ui.requests.length, 1)
+  ui.expireRequests()
+  assert.equal(stalled.signal.aborted, true)
+  assert.match(ui.text(), /GitHub status request timed out/)
+  ui.tick()
+  ui.requests[1].resolve(snapshot('ready'))
+  await setImmediate()
+  stalled.resolve(snapshot('idle'))
+  await setImmediate()
+  ui.expireRequests()
+  assert.match(ui.text(), /Connected/)
+  assert.doesNotMatch(ui.text(), /timed out/)
   ui.unmount()
 })
