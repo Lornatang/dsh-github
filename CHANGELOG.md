@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.9
+
+- Keep older status polls from overwriting the latest connection action and retry stalled polls.
+- Scan streaming responses and redact tool output in a single pass.
+
 ## 0.1.8
 
 - Assign stable ids to output schemas so warm validation workers skip re-sending and re-cloning an unchanged schema, and retire a worker when its compiled-schema cache is full.
