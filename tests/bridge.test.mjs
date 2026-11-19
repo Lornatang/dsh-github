@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { GithubBridge, publicToolName } from '../lib/bridge.js'
 import { SessionStore, sessionFileFor } from '../lib/store.js'
 import { createGithubFetch } from '../lib/transport.js'
@@ -119,6 +120,27 @@ test('preserves MCP structure when the active credential is a short common value
     const result = await f.definitions.get('mcp__github__get_file_contents').execute({ path: 'text.txt' }, {})
     assert.equal(result.content[0].type, 'text')
     assert.equal(result.content[0].text, 'Read [REDACTED].txt [REDACTED]')
+  } finally { await f.close() }
+})
+
+test('redacts nested keys and values without revisiting or copying clean branches', async (t) => {
+  const f = await fixture({ token: 'text' })
+  try {
+    assert.equal((await f.bridge.connect({ source: 'token', token: 'text' })).status, 'ready')
+    let reads = 0
+    const clean = { get value() { reads++; return [0, false, null] } }
+    const details = { clean, nested: { 'secret-text': 'text' } }
+    const content = [{ type: 'text', text: 'safe', details }]
+    t.mock.method(Client.prototype, 'callTool', async () => ({ content }))
+    const result = await f.definitions.get('mcp__github__get_file_contents').execute({}, {})
+    assert.equal(reads, 1)
+    assert.notEqual(result.content, content)
+    assert.notEqual(result.content[0].details, details)
+    assert.equal(result.content[0].details.clean, clean)
+    assert.deepEqual(result.content[0].details.nested, { 'secret-[REDACTED]': '[REDACTED]' })
+    assert.deepEqual(details.nested, { 'secret-text': 'text' })
+    assert.equal(result.content[0].type, 'text')
+    assert.equal(result.content[0].text, 'safe')
   } finally { await f.close() }
 })
 

@@ -9,59 +9,55 @@ type LimitExceeded = () => void
 
 function limitStream(body: ReadableStream<Uint8Array>, maxBytes: number, events: boolean, onLimit: LimitExceeded, onEvent?: () => void): ReadableStream<Uint8Array> {
   let size = 0
-  let lineSize = 0
+  let lineHasData = false
   let lineStartSize = 0
   let comment = false
   let previousCR = false
   let discardFollowingLF = false
+  const exceeded = (): never => {
+    onLimit()
+    throw new Error('github: MCP response exceeds the byte limit')
+  }
   return body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
     transform(chunk, controller) {
       if (events) {
-        // Fast path for chunks without line separators: account in bulk instead
-        // of scanning every byte. Equivalent to the loop below for such chunks.
-        if (chunk.length > 0 && !chunk.includes(13) && !chunk.includes(10)) {
-          if (lineSize === 0) comment = chunk[0] === 58
-          lineSize += chunk.length
-          size += chunk.length
-          previousCR = false
-          if (size > maxBytes) { onLimit(); throw new Error('github: MCP response exceeds the byte limit') }
-          controller.enqueue(chunk)
-          return
-        }
-        // SSE events end at a blank line. Handle CR, LF and CRLF, including
-        // separators split across network chunks, without buffering an event.
-        for (const byte of chunk) {
+        let offset = 0
+        while (offset < chunk.length) {
+          // Scan and charge the next run together, stopping once it exceeds the
+          // remaining budget. This also covers chunks with no line separators.
+          const start = offset
+          const end = Math.min(chunk.length, offset + maxBytes - size + 1)
+          while (offset < end && chunk[offset] !== 13 && chunk[offset] !== 10) offset++
+          if (offset > start) {
+            if (!lineHasData) comment = chunk[start] === 58
+            lineHasData = true
+            previousCR = false
+            size += offset - start
+            if (size > maxBytes) exceeded()
+          }
+          if (offset === chunk.length) break
+
+          const byte = chunk[offset++]
           if (byte === 10 && previousCR) {
             previousCR = false
-            if (!discardFollowingLF && ++size > maxBytes) { onLimit(); throw new Error('github: MCP response exceeds the byte limit') }
+            if (!discardFollowingLF && ++size > maxBytes) exceeded()
             lineStartSize = size
             continue
           }
-          if (++size > maxBytes) { onLimit(); throw new Error('github: MCP response exceeds the byte limit') }
-          if (byte === 13) {
-            discardFollowingLF = lineSize === 0 || comment
-            if (lineSize === 0) { onEvent?.(); size = 0 }
-            else if (comment) size = lineStartSize
-            lineSize = 0
-            comment = false
-            lineStartSize = size
-            previousCR = true
-          } else if (byte === 10) {
-            if (lineSize === 0) { onEvent?.(); size = 0 }
-            else if (comment) size = lineStartSize
-            lineSize = 0
-            comment = false
-            lineStartSize = size
-            previousCR = false
-          } else {
-            if (lineSize === 0) comment = byte === 58
-            lineSize++
-            previousCR = false
-          }
+          if (++size > maxBytes) exceeded()
+          // A blank line resets the event budget. A comment only rewinds its
+          // own bytes. Remember whether a following LF belongs to either line.
+          previousCR = byte === 13
+          discardFollowingLF = !lineHasData || comment
+          if (!lineHasData) { onEvent?.(); size = 0 }
+          else if (comment) size = lineStartSize
+          lineHasData = false
+          comment = false
+          lineStartSize = size
         }
       } else {
         size += chunk.byteLength
-        if (size > maxBytes) { onLimit(); throw new Error('github: MCP response exceeds the byte limit') }
+        if (size > maxBytes) exceeded()
       }
       controller.enqueue(chunk)
     },

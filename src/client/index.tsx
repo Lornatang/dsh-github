@@ -24,8 +24,8 @@ if (typeof document !== 'undefined' && !document.querySelector('style[data-dsh-g
   document.head.appendChild(style)
 }
 
-async function api(path: string, body?: unknown): Promise<Snapshot> {
-  const response = await fetch(prefix + path, body === undefined ? { method: 'GET', cache: 'no-store' } : {
+async function api(path: string, body?: unknown, signal?: AbortSignal): Promise<Snapshot> {
+  const response = await fetch(prefix + path, body === undefined ? { method: 'GET', cache: 'no-store', signal } : {
     method: 'POST', cache: 'no-store', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
   })
   const text = await response.text()
@@ -41,25 +41,68 @@ export function GithubSettings(): React.ReactElement {
   const [token, setToken] = React.useState('')
   const [busy, setBusy] = React.useState(false)
   const [copied, setCopied] = React.useState(false)
-  const refresh = React.useCallback(async () => {
-    try { setSnapshot(await api('/status')); setError('') }
-    catch (err) { setError(err instanceof Error ? err.message : 'Unable to load status') }
+  const statusRequest = React.useRef<AbortController | null>(null)
+  const pendingAction = React.useRef<symbol | null>(null)
+  const cancelRefresh = React.useCallback(() => {
+    statusRequest.current?.abort()
+    statusRequest.current = null
   }, [])
+  const refresh = React.useCallback(async (replace = false) => {
+    if (pendingAction.current || document.hidden) return
+    if (statusRequest.current) {
+      if (!replace) return
+      cancelRefresh()
+    }
+    const request = new AbortController()
+    statusRequest.current = request
+    try {
+      const value = await api('/status', undefined, request.signal)
+      if (statusRequest.current !== request) return
+      setSnapshot(value)
+      setError('')
+    } catch (err) {
+      if (statusRequest.current === request) setError(err instanceof Error ? err.message : 'Unable to load status')
+    } finally {
+      if (statusRequest.current === request) statusRequest.current = null
+    }
+  }, [cancelRefresh])
   React.useEffect(() => {
     // Pause background polling while the tab is hidden; refresh on return.
     let timer: number | undefined
-    const stop = (): void => { if (timer !== undefined) { window.clearInterval(timer); timer = undefined } }
+    const stop = (): void => {
+      if (timer !== undefined) { window.clearInterval(timer); timer = undefined }
+      cancelRefresh()
+    }
     const start = (): void => { if (timer === undefined) { void refresh(); timer = window.setInterval(() => { void refresh() }, 3000) } }
     const onVisibility = (): void => { if (document.hidden) stop(); else start() }
     if (!document.hidden) start()
     document.addEventListener('visibilitychange', onVisibility)
-    return () => { stop(); document.removeEventListener('visibilitychange', onVisibility) }
-  }, [refresh])
+    return () => {
+      stop()
+      pendingAction.current = null
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [cancelRefresh, refresh])
   const act = async (action: 'connect' | 'cancel' | 'disconnect', input: unknown): Promise<void> => {
-    setBusy(true); setError('')
-    try { setSnapshot(await api(`/${action}`, input)); if (action === 'connect') setToken('') }
-    catch (err) { setError(err instanceof Error ? err.message : 'Connection failed') }
-    finally { setBusy(false) }
+    if (pendingAction.current) return
+    const request = Symbol()
+    pendingAction.current = request
+    cancelRefresh()
+    setBusy(true)
+    setError('')
+    try {
+      const value = await api(`/${action}`, input)
+      if (pendingAction.current !== request) return
+      setSnapshot(value)
+      if (action === 'connect') setToken('')
+    } catch (err) {
+      if (pendingAction.current === request) setError(err instanceof Error ? err.message : 'Connection failed')
+    } finally {
+      if (pendingAction.current === request) {
+        pendingAction.current = null
+        setBusy(false)
+      }
+    }
   }
   const connectOAuth = (): void => { window.open('https://github.com/login/device', '_blank', 'noopener,noreferrer'); void act('connect', { source: 'oauth' }) }
   const copyCode = (): void => {
@@ -90,7 +133,7 @@ export function GithubSettings(): React.ReactElement {
         h('button', { className: 'dsg-button primary', disabled: connecting || !snapshot?.oauthAvailable, onClick: connectOAuth }, 'Connect with GitHub'),
         h('button', { className: 'dsg-button', disabled: connecting, onClick: () => { void act('connect', { source: 'gh' }) } }, 'Connect with GitHub CLI'),
         status !== 'idle' && status !== 'loading' ? h('button', { className: 'dsg-button', disabled: busy, onClick: () => { void act(status === 'authorizing' ? 'cancel' : 'disconnect', {}) } }, status === 'authorizing' ? 'Cancel' : 'Disconnect') : null,
-        h('button', { className: 'dsg-button', disabled: busy, onClick: () => { void refresh() } }, 'Refresh status')),
+        h('button', { className: 'dsg-button', disabled: busy, onClick: () => { void refresh(true) } }, 'Refresh status')),
       snapshot && !snapshot.oauthAvailable ? h('p', { className: 'dsg-note' }, 'Browser sign-in is unavailable. Ask the plugin administrator to configure it.') : null,
       status === 'authorizing' && snapshot?.authorization ? h('div', { className: 'dsg-auth' },
         h('p', null, 'Enter this one-time code on GitHub, then approve the requested access:'),
